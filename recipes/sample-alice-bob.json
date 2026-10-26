@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "name": "alice-logout-bob-profile",
+  "recorded_base_url": "http://127.0.0.1:8101",
+  "expectation": {
+    "kind": "heading_text",
+    "text": "Profile for Bob",
+    "level": 1
+  },
+  "actions": [
+    {
+      "type": "goto",
+      "path": "/"
+    },
+    {
+      "type": "fill",
+      "locator": {
+        "role": "textbox",
+        "name": "Username"
+      },
+      "text": "alice"
+    },
+    {
+      "type": "click",
+      "locator": {
+        "role": "button",
+        "name": "Log in"
+      }
+    },
+    {
+      "type": "click",
+      "locator": {
+        "role": "link",
+        "name": "View profile"
+      }
+    },
+    {
+      "type": "click",
+      "locator": {
+        "role": "button",
+        "name": "Log out"
+      }
+    },
+    {
+      "type": "fill",
+      "locator": {
+        "role": "textbox",
+        "name": "Username"
+      },
+      "text": "bob"
+    },
+    {
+      "type": "click",
+      "locator": {
+        "role": "button",
+        "name": "Log in"
+      }
+    },
+    {
+      "type": "click",
+      "locator": {
+        "role": "link",
+        "name": "View profile"
+      }
+    }
+  ]
+}
