@@ -1,0 +1,14 @@
+{
+  "requirement_id": "R2",
+  "title": "Second task preserves the first",
+  "description": "Add both allowed task titles in one session and check that the Tasks region still contains the first title.",
+  "expectation": {
+    "kind": "region_text_exact",
+    "text": "Prepare hackathon demo",
+    "region": "Tasks"
+  },
+  "test_data": [
+    "Prepare hackathon demo",
+    "Review submission"
+  ]
+}

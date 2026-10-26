@@ -145,6 +145,27 @@ def render_report(run: dict[str, Any]) -> str:
         for line in str(run["bug_report"]).splitlines() or [""]:
             lines.append(f"> {line}")
 
+    requirement = run.get("requirement")
+    scenario = run.get("scenario")
+    if requirement or scenario:
+        lines.extend(["", "## Exploration scenario", ""])
+        if requirement:
+            lines.append(
+                f"- Requirement: {_cell(requirement.get('id'), 20)} — "
+                f"{requirement.get('text', '')}"
+            )
+        if scenario:
+            lines.append(f"- Scenario: {scenario.get('title', '')}")
+            if scenario.get("description"):
+                lines.append(f"- Intent: {scenario['description']}")
+            test_data = scenario.get("test_data") or []
+            if test_data:
+                lines.append(
+                    "- Test data: " + ", ".join(f"`{item}`" for item in test_data)
+                )
+        if run.get("exploration_id"):
+            lines.append(f"- Exploration: {_cell(run['exploration_id'], 80)}")
+
     lines.extend(["", "## Actions", ""])
     if run["actions"]:
         lines.extend(

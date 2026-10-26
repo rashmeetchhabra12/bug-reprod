@@ -1,6 +1,6 @@
 # Agent guide - Bug Repro
 
-This repository is a Phase 3 prototype. Read `docs/PROGRESS.md` and
+This repository is a Phase 4 prototype. Read `docs/PROGRESS.md` and
 `docs/ALAN_WORKFLOW.md` before extending it. The deliberately scripted
 mechanics checks must stay green, and they must stay labelled as scripted.
 
@@ -28,6 +28,13 @@ mechanics checks must stay green, and they must stay labelled as scripted.
 .\.venv\Scripts\bugrepro.exe agent finish --session <id>
 .\.venv\Scripts\bugrepro.exe agent export --session <id>
 .\.venv\Scripts\bugrepro.exe report --attempt runs\<live> --buggy runs\<replay> --fixed runs\<replay> --output runs\evidence-report.html
+.\.venv\Scripts\bugrepro.exe explore start --spec-file examples\task-exploration.json --driver alan-agent --label live-task-buggy
+.\.venv\Scripts\bugrepro.exe explore scenario start --exploration <id> --scenario-file examples\task-scenario-r1.json
+.\.venv\Scripts\bugrepro.exe explore scenario finish --exploration <id> --scenario S1
+.\.venv\Scripts\bugrepro.exe explore scenario export --exploration <id> --scenario S1
+.\.venv\Scripts\bugrepro.exe explore scenario confirm --exploration <id> --scenario S1
+.\.venv\Scripts\bugrepro.exe explore finish --exploration <id>
+.\.venv\Scripts\bugrepro.exe report --exploration runs\<exploration-dir> --output runs\exploration-report.html
 ```
 
 `pytest` uses `.pytest-tmp/` as its basetemp because the machine's shared
@@ -70,6 +77,18 @@ pytest temp directory is not readable.
 10. **Driver labels must stay honest.** `alan-agent` only when a model chose
     the actions; `scripted-test` for pre-written sequences;
     `recorded-replay` for replays. Never describe a scripted run as AI.
+11. **Exploration requirements are user-owned and frozen.** Requirements and
+    allowed test data come only from the validated exploration spec. A scenario
+    must reference an existing requirement; it can never add, reword or replace
+    one, and it freezes its expectation before the first action.
+12. **Exploration stays bounded.** At most 3 scenarios, at most 60 browser
+    actions in total (scenario plus replay-confirmation actions), and at most 20
+    actions per scenario. Existing per-session timeouts still apply.
+13. **Exploration findings are conservative.** `violation` requires an
+    error-free failed expectation whose exported recipe reproduces the same
+    observation in a fresh context on the same target. Action failures,
+    execution errors, crashes and budget exhaustion are never product findings;
+    a passing scenario is never a bug-free claim.
 
 ## Where to change things
 
@@ -78,9 +97,14 @@ pytest temp directory is not readable.
 - New expectation kind: `expectations.py` schema + `check.py` evaluation, with
   explicit passed/failed/error semantics. Only `heading_text` and
   `region_text_exact` exist; do not turn this into a general assertion language.
-- Report output: `report.py` (Markdown) and `html_report.py` (portable HTML);
-  `run.json` remains the source of truth. Escape every dynamic value in HTML
-  and embed only images inside the selected run directory.
+- Report output: `report.py` (Markdown) and `html_report.py` (portable HTML,
+  including exploration mode); `run.json` and `exploration.json` remain the
+  source of truth. Escape every dynamic value in HTML and embed only images
+  inside the selected run or exploration directory.
+- Exploration: `exploration.py` (spec/scenario validation, budget,
+  classification, confirmation). It must not call a model and must not weaken
+  the rules above. Replay confirmation goes through `execute_recipe_with_host`
+  so there is still one Playwright host per worker thread.
 - Demo apps: `sample_app/server.py` (accounts) and `task_app/server.py`
   (tasks). Keep buggy and fixed independently startable, with identical
   accessible controls in both modes.
@@ -98,6 +122,6 @@ pytest temp directory is not readable.
   and 0 respectively.
 - Any new claim is marked implemented vs planned in `docs/PROGRESS.md`.
 - The HTML report is still self-contained: no scripts, no network requests,
-  only explicitly selected runs.
+  only explicitly selected runs or the selected exploration.
 - No dashboard, database, auth system, auto-patching or GitHub integration is
   added.

@@ -33,6 +33,11 @@ from urllib.parse import urlsplit
 
 from .browser import BrowserStartupError, PlaywrightHost
 from .expectations import ExpectationError, parse_expectation
+from .exploration import (
+    Exploration,
+    ExplorationError,
+    parse_exploration_spec,
+)
 from .investigation import (
     INVESTIGATION_DRIVERS,
     MODEL_SOURCES,
@@ -59,6 +64,9 @@ ALLOWED_START_FIELDS = frozenset(
         "action_budget",
         "timeout_ms",
     }
+)
+ALLOWED_EXPLORATION_START_FIELDS = frozenset(
+    {"spec", "driver", "model", "label", "target_override"}
 )
 
 
@@ -93,6 +101,42 @@ def _validate_rationale(value: Any) -> str | None:
     if "\x00" in text:
         raise InvestigationError("rationale must not contain a NUL character.")
     return text
+
+
+def _parse_driver_and_model(payload: dict[str, Any]) -> tuple[str, dict[str, str]]:
+    driver = payload.get("driver", "scripted-test")
+    if driver not in INVESTIGATION_DRIVERS:
+        raise InvestigationError(
+            f"driver must be one of {sorted(INVESTIGATION_DRIVERS)}."
+        )
+
+    model_payload = payload.get("model", {})
+    if not isinstance(model_payload, dict):
+        raise InvestigationError("model must be an object.")
+    unknown_model = set(model_payload) - {"id", "source"}
+    if unknown_model:
+        raise InvestigationError(
+            f"Unknown model field(s): {sorted(unknown_model)}."
+        )
+    model_id = model_payload.get("id", "unknown")
+    if not isinstance(model_id, str) or len(model_id) > 200:
+        raise InvestigationError("model.id must be a string of at most 200 chars.")
+    model_source = model_payload.get("source", "session-reported")
+    if model_source not in MODEL_SOURCES:
+        raise InvestigationError(
+            f"model.source must be one of {sorted(MODEL_SOURCES)}."
+        )
+    if not model_id.strip() or model_id.strip().lower() == "unknown":
+        model_id = "unknown"
+        model_source = "unavailable"
+    return driver, {"id": model_id, "source": model_source}
+
+
+def _validate_label(value: Any, default: str = "investigation") -> str:
+    label = value if value is not None else default
+    if not isinstance(label, str) or not label.strip() or len(label) > 80:
+        raise InvestigationError("label must be a string of 1-80 characters.")
+    return label
 
 
 @dataclass
@@ -132,6 +176,7 @@ class AgentService:
         self.config = config
         self.token = secrets.token_urlsafe(32)
         self.sessions: dict[str, Investigation] = {}
+        self.explorations: dict[str, Exploration] = {}
         self.host: PlaywrightHost | None = None
         self.last_activity = time.monotonic()
         self.stop_event = threading.Event()
@@ -202,6 +247,12 @@ class AgentService:
         """Close every session and the browser. Runs on the worker thread."""
         if self._worker_stop:
             return {"status": "ok", "stopping": True}
+        for exploration in list(self.explorations.values()):
+            try:
+                exploration.close("Service shutdown.")
+            except Exception:  # noqa: BLE001 - cleanup is best effort
+                pass
+        self.explorations.clear()
         for session_id, investigation in list(self.sessions.items()):
             try:
                 investigation.close("Service shutdown.")
@@ -278,36 +329,8 @@ class AgentService:
         except ExpectationError as exc:
             raise InvestigationError(f"expectation: {exc}") from exc
 
-        driver = payload.get("driver", "scripted-test")
-        if driver not in INVESTIGATION_DRIVERS:
-            raise InvestigationError(
-                f"driver must be one of {sorted(INVESTIGATION_DRIVERS)}."
-            )
-
-        model_payload = payload.get("model", {})
-        if not isinstance(model_payload, dict):
-            raise InvestigationError("model must be an object.")
-        unknown_model = set(model_payload) - {"id", "source"}
-        if unknown_model:
-            raise InvestigationError(
-                f"Unknown model field(s): {sorted(unknown_model)}."
-            )
-        model_id = model_payload.get("id", "unknown")
-        if not isinstance(model_id, str) or len(model_id) > 200:
-            raise InvestigationError("model.id must be a string of at most 200 chars.")
-        model_source = model_payload.get("source", "session-reported")
-        if model_source not in MODEL_SOURCES:
-            raise InvestigationError(
-                f"model.source must be one of {sorted(MODEL_SOURCES)}."
-            )
-        if not model_id.strip() or model_id.strip().lower() == "unknown":
-            model_id = "unknown"
-            model_source = "unavailable"
-        model = {"id": model_id, "source": model_source}
-
-        label = payload.get("label", "investigation")
-        if not isinstance(label, str) or not label.strip() or len(label) > 80:
-            raise InvestigationError("label must be a string of 1-80 characters.")
+        driver, model = _parse_driver_and_model(payload)
+        label = _validate_label(payload.get("label"))
 
         budget_limit = payload.get("action_budget", 20)
         if isinstance(budget_limit, bool) or not isinstance(budget_limit, int):
@@ -414,6 +437,125 @@ class AgentService:
         self.sessions.pop(session_id, None)
         return result
 
+    # ---------------------------------------------------------- explorations
+    def _get_exploration(self, exploration_id: str) -> Exploration:
+        exploration = self.explorations.get(exploration_id)
+        if exploration is None:
+            raise AgentServiceError(
+                f"Unknown exploration: {exploration_id}.",
+                http_status=404,
+                code="unknown_exploration",
+            )
+        return exploration
+
+    def start_exploration(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self.touch()
+        if not isinstance(payload, dict):
+            raise ExplorationError("The request body must be a JSON object.")
+        unknown = set(payload) - ALLOWED_EXPLORATION_START_FIELDS
+        if unknown:
+            raise ExplorationError(
+                f"Unknown field(s) in the exploration request: {sorted(unknown)}."
+            )
+        raw_spec = payload.get("spec")
+        if not isinstance(raw_spec, dict):
+            raise ExplorationError("spec must be a JSON object.")
+        target_override = payload.get("target_override")
+        if target_override is not None and not isinstance(target_override, str):
+            raise ExplorationError("target_override must be a string when provided.")
+
+        spec = parse_exploration_spec(raw_spec, target_override=target_override)
+        driver, model = _parse_driver_and_model(payload)
+        label = _validate_label(payload.get("label"), default="exploration")
+
+        spec_target = raw_spec.get("target")
+        override_meta = {
+            "used": target_override is not None,
+            "spec_target": spec_target if isinstance(spec_target, str) else None,
+            "actual_target": spec.target,
+        }
+
+        exploration_id = secrets.token_urlsafe(10)
+        while exploration_id in self.explorations:  # pragma: no cover
+            exploration_id = secrets.token_urlsafe(10)
+
+        exploration = Exploration.start(
+            exploration_id=exploration_id,
+            spec=spec,
+            run_root=self.config.run_root,
+            label=label,
+            driver=driver,
+            model=model,
+            target_override=override_meta,
+        )
+        self.explorations[exploration_id] = exploration
+        return exploration.status_payload()
+
+    def exploration_status(self, exploration_id: str) -> dict[str, Any]:
+        self.touch()
+        return self._get_exploration(exploration_id).status_payload()
+
+    def start_scenario(
+        self, exploration_id: str, payload: Any
+    ) -> dict[str, Any]:
+        self.touch()
+        exploration = self._get_exploration(exploration_id)
+        host = self._ensure_host()
+        session_id = secrets.token_urlsafe(12)
+        while session_id in self.sessions:  # pragma: no cover
+            session_id = secrets.token_urlsafe(12)
+
+        scenario_payload, investigation, closed_sessions = exploration.start_scenario(
+            payload,
+            host=host,
+            session_id=session_id,
+            headless=self.config.headless,
+            timeout_ms=10_000,
+        )
+        for closed_session_id in closed_sessions:
+            self.sessions.pop(closed_session_id, None)
+        self.sessions[session_id] = investigation
+        return scenario_payload
+
+    def finish_scenario(
+        self, exploration_id: str, scenario_id: str
+    ) -> dict[str, Any]:
+        self.touch()
+        return self._get_exploration(exploration_id).finish_scenario(scenario_id)
+
+    def export_scenario(
+        self, exploration_id: str, scenario_id: str
+    ) -> dict[str, Any]:
+        self.touch()
+        return self._get_exploration(exploration_id).export_scenario(scenario_id)
+
+    def confirm_scenario(
+        self, exploration_id: str, scenario_id: str
+    ) -> dict[str, Any]:
+        self.touch()
+        host = self._ensure_host()
+        return self._get_exploration(exploration_id).confirm_scenario(
+            scenario_id,
+            host=host,
+            timeout_ms=10_000,
+        )
+
+    def close_scenario(
+        self, exploration_id: str, scenario_id: str
+    ) -> dict[str, Any]:
+        self.touch()
+        result = self._get_exploration(exploration_id).close_scenario(scenario_id)
+        self.sessions.pop(result.get("closed_session_id"), None)
+        return result
+
+    def finish_exploration(self, exploration_id: str) -> dict[str, Any]:
+        self.touch()
+        exploration = self._get_exploration(exploration_id)
+        result = exploration.finish()
+        for scenario in exploration.scenarios:
+            self.sessions.pop(scenario.session_id, None)
+        return result
+
 
 class _ServiceHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
@@ -511,12 +653,22 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _handle_get(self, path: str) -> None:
         match = re.fullmatch(r"/sessions/([A-Za-z0-9_-]{1,64})", path)
-        if not match:
-            self._error(HTTPStatus.NOT_FOUND, "Unknown endpoint.", "not_found")
+        if match:
+            self._send_json(
+                HTTPStatus.OK,
+                self.service.submit(lambda: self.service.status(match[1])),
+            )
             return
-        self._send_json(
-            HTTPStatus.OK, self.service.submit(lambda: self.service.status(match[1]))
-        )
+        match = re.fullmatch(r"/explorations/([A-Za-z0-9_-]{1,64})", path)
+        if match:
+            self._send_json(
+                HTTPStatus.OK,
+                self.service.submit(
+                    lambda: self.service.exploration_status(match[1])
+                ),
+            )
+            return
+        self._error(HTTPStatus.NOT_FOUND, "Unknown endpoint.", "not_found")
 
     def _handle_post(self, path: str, body: dict[str, Any]) -> None:
         if path == "/shutdown":
@@ -532,6 +684,73 @@ class _Handler(BaseHTTPRequestHandler):
                 HTTPStatus.CREATED,
                 self.service.submit(lambda: self.service.start_investigation(body)),
             )
+            return
+
+        if path == "/explorations":
+            self._send_json(
+                HTTPStatus.CREATED,
+                self.service.submit(lambda: self.service.start_exploration(body)),
+            )
+            return
+
+        match = re.fullmatch(
+            r"/explorations/([A-Za-z0-9_-]{1,64})/finish", path
+        )
+        if match:
+            self._require_empty_body(body)
+            self._send_json(
+                HTTPStatus.OK,
+                self.service.submit(
+                    lambda: self.service.finish_exploration(match[1])
+                ),
+            )
+            return
+
+        match = re.fullmatch(
+            r"/explorations/([A-Za-z0-9_-]{1,64})/scenarios", path
+        )
+        if match:
+            self._send_json(
+                HTTPStatus.CREATED,
+                self.service.submit(
+                    lambda: self.service.start_scenario(match[1], body)
+                ),
+            )
+            return
+
+        match = re.fullmatch(
+            r"/explorations/([A-Za-z0-9_-]{1,64})/scenarios/"
+            r"([A-Za-z0-9_-]{1,32})/(finish|export|confirm|close)",
+            path,
+        )
+        if match:
+            self._require_empty_body(body)
+            exploration_id, scenario_id, action = match[1], match[2], match[3]
+            if action == "finish":
+                payload = self.service.submit(
+                    lambda: self.service.finish_scenario(
+                        exploration_id, scenario_id
+                    )
+                )
+            elif action == "export":
+                payload = self.service.submit(
+                    lambda: self.service.export_scenario(
+                        exploration_id, scenario_id
+                    )
+                )
+            elif action == "confirm":
+                payload = self.service.submit(
+                    lambda: self.service.confirm_scenario(
+                        exploration_id, scenario_id
+                    )
+                )
+            else:
+                payload = self.service.submit(
+                    lambda: self.service.close_scenario(
+                        exploration_id, scenario_id
+                    )
+                )
+            self._send_json(HTTPStatus.OK, payload)
             return
 
         match = re.fullmatch(

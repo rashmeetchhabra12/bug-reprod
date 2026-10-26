@@ -24,9 +24,21 @@ Phase 3 (second fixture and portable evidence):
     bugrepro report --attempt runs/<live> --buggy runs/<replay> \
         --fixed runs/<replay> --output runs/evidence-report.html
 
+Phase 4 (bounded, requirement-guided exploration):
+
+    bugrepro explore start --spec-file examples/task-exploration.json
+    bugrepro explore scenario start --exploration <id> --scenario-file <json>
+    bugrepro agent observe --session <scenario-session>
+    bugrepro agent act --session <scenario-session> --action-file <json>
+    bugrepro explore scenario finish --exploration <id> --scenario <scenario-id>
+    bugrepro explore scenario export --exploration <id> --scenario <scenario-id>
+    bugrepro explore scenario confirm --exploration <id> --scenario <scenario-id>
+    bugrepro explore finish --exploration <id>
+    bugrepro report --exploration runs/<exploration-dir> --output runs/exploration.html
+
 Exit codes for run/replay/finish: 0 = expectation passed, 1 = expectation
-failed, 2 = execution error / incomplete attempt. Agent control commands
-return 0 on a successful operation and 2 on a service or action error.
+failed, 2 = execution error / incomplete attempt. Agent and exploration
+control commands return 0 on a successful operation and 2 on a service error.
 """
 
 from __future__ import annotations
@@ -298,7 +310,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="render a self-contained HTML evidence report from selected runs",
     )
     report_parser.add_argument(
-        "--attempt", required=True, help="run directory of the original attempt"
+        "--attempt", default=None, help="run directory of the original attempt"
     )
     report_parser.add_argument(
         "--buggy", default=None, help="run directory of the buggy replay"
@@ -307,8 +319,79 @@ def build_parser() -> argparse.ArgumentParser:
         "--fixed", default=None, help="run directory of the fixed replay"
     )
     report_parser.add_argument(
+        "--exploration",
+        default=None,
+        help="exploration directory containing exploration.json",
+    )
+    report_parser.add_argument(
         "--output", required=True, help="path of the HTML file to write"
     )
+
+    explore_parser = sub.add_parser(
+        "explore",
+        help="bounded, requirement-guided exploration through the agent service",
+    )
+    explore_sub = explore_parser.add_subparsers(
+        dest="explore_command", required=True
+    )
+
+    explore_start = explore_sub.add_parser(
+        "start", help="start a bounded exploration from a spec file"
+    )
+    _add_state_file_argument(explore_start)
+    explore_start.add_argument("--spec-file", required=True)
+    explore_start.add_argument(
+        "--target",
+        default=None,
+        help="optional loopback target override, recorded as an override",
+    )
+    explore_start.add_argument(
+        "--driver",
+        choices=("alan-agent", "scripted-test"),
+        default="scripted-test",
+    )
+    explore_start.add_argument("--model", default="unknown")
+    explore_start.add_argument(
+        "--model-source",
+        choices=("session-reported", "unavailable"),
+        default="session-reported",
+    )
+    explore_start.add_argument("--label", default="exploration")
+
+    explore_status = explore_sub.add_parser("status", help="inspect an exploration")
+    _add_state_file_argument(explore_status)
+    explore_status.add_argument("--exploration", required=True)
+
+    explore_finish = explore_sub.add_parser(
+        "finish", help="finish an exploration and write its manifest"
+    )
+    _add_state_file_argument(explore_finish)
+    explore_finish.add_argument("--exploration", required=True)
+
+    scenario_parser = explore_sub.add_parser(
+        "scenario", help="propose, run, finish, export or confirm a scenario"
+    )
+    scenario_sub = scenario_parser.add_subparsers(
+        dest="scenario_command", required=True
+    )
+
+    scenario_start = scenario_sub.add_parser(
+        "start", help="freeze a scenario expectation and start its investigation"
+    )
+    _add_state_file_argument(scenario_start)
+    scenario_start.add_argument("--exploration", required=True)
+    scenario_start.add_argument("--scenario-file", required=True)
+
+    for name, help_text in (
+        ("finish", "finish a scenario and classify it"),
+        ("export", "export the scenario's executed recipe"),
+        ("confirm", "replay the exported recipe to confirm a violation"),
+        ("close", "close a scenario without finishing it"),
+    ):
+        scenario_cmd = scenario_sub.add_parser(name, help=help_text)
+        _add_state_file_argument(scenario_cmd)
+        scenario_cmd.add_argument("--exploration", required=True)
+        scenario_cmd.add_argument("--scenario", required=True)
 
     return parser
 
@@ -483,8 +566,113 @@ def _cmd_agent_client(args) -> int:
     return EXIT_PASSED
 
 
+def _cmd_explore(args) -> int:
+    """Drive a bounded exploration through the local service."""
+    try:
+        client = AgentClient(args.state_file)
+        command = args.explore_command
+
+        if command == "start":
+            spec = _read_json_object(args.spec_file, "exploration spec file")
+            payload: dict[str, Any] = {
+                "spec": spec,
+                "driver": args.driver,
+                "model": {"id": args.model, "source": args.model_source},
+                "label": args.label,
+            }
+            if args.target:
+                payload["target_override"] = args.target
+            result = client.start_exploration(payload)
+        elif command == "status":
+            result = client.exploration_status(args.exploration)
+        elif command == "finish":
+            result = client.finish_exploration(args.exploration)
+        elif command == "scenario":
+            scenario_command = args.scenario_command
+            if scenario_command == "start":
+                scenario = _read_json_object(
+                    args.scenario_file, "scenario file"
+                )
+                result = client.start_scenario(args.exploration, scenario)
+            elif scenario_command == "finish":
+                result = client.finish_scenario(
+                    args.exploration, args.scenario
+                )
+            elif scenario_command == "export":
+                result = client.export_scenario(
+                    args.exploration, args.scenario
+                )
+            elif scenario_command == "confirm":
+                result = client.confirm_scenario(
+                    args.exploration, args.scenario
+                )
+            else:
+                result = client.close_scenario(
+                    args.exploration, args.scenario
+                )
+        else:  # pragma: no cover - argparse restricts choices
+            raise ValueError(f"Unknown explore command: {command}")
+    except (AgentClientError, OSError, ValueError) as exc:
+        print(json.dumps(_agent_error(exc), indent=2, ensure_ascii=False))
+        return EXIT_ERROR
+
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return EXIT_PASSED
+
+
 def _cmd_report(args) -> int:
-    """Render a self-contained HTML report from explicitly selected runs."""
+    """Render a self-contained HTML report from explicitly selected data."""
+    if args.exploration and (args.attempt or args.buggy or args.fixed):
+        print(
+            json.dumps(
+                {
+                    "status": "error",
+                    "error": "--exploration cannot be combined with --attempt/--buggy/--fixed.",
+                }
+            )
+        )
+        return EXIT_ERROR
+    if not args.exploration and not args.attempt:
+        print(
+            json.dumps(
+                {"status": "error", "error": "Provide --attempt or --exploration."}
+            )
+        )
+        return EXIT_ERROR
+
+    if args.exploration:
+        from .html_report import (
+            load_exploration_report,
+            write_exploration_html,
+        )
+
+        try:
+            report = load_exploration_report(args.exploration)
+            output = write_exploration_html(report, args.output)
+        except Exception as exc:  # noqa: BLE001 - the caller gets JSON
+            print(
+                json.dumps(
+                    {"status": "error", "error": f"{type(exc).__name__}: {exc}"},
+                    indent=2,
+                    ensure_ascii=False,
+                )
+            )
+            return EXIT_ERROR
+        print(
+            json.dumps(
+                {
+                    "status": "ok",
+                    "output": str(output),
+                    "exploration": str(report.run_dir),
+                    "classification_counts": report.counts,
+                    "scenarios": len(report.manifest.get("scenarios", [])),
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return EXIT_PASSED
+
     from .html_report import (
         compare_fingerprints,
         load_report_run,
@@ -548,6 +736,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.agent_command == "serve":
             return _cmd_agent_serve(args)
         return _cmd_agent_client(args)
+
+    if args.command == "explore":
+        return _cmd_explore(args)
 
     if args.command == "report":
         return _cmd_report(args)

@@ -1,0 +1,32 @@
+{
+  "target": "http://127.0.0.1:8103",
+  "description": "A small task list where a user adds tasks by title and sees them in a Tasks region.",
+  "requirements": [
+    {
+      "id": "R1",
+      "text": "An added task remains visible after reloading."
+    },
+    {
+      "id": "R2",
+      "text": "Adding a second distinct task preserves the first task."
+    }
+  ],
+  "allowed_actions": [
+    "goto",
+    "click",
+    "fill",
+    "reload",
+    "observe",
+    "screenshot"
+  ],
+  "allowed_test_data": [
+    "Prepare hackathon demo",
+    "Review submission"
+  ],
+  "excluded_interactions": [
+    "Deleting tasks",
+    "Changing account settings"
+  ],
+  "max_scenarios": 3,
+  "max_actions": 60
+}

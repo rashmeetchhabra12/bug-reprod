@@ -1,0 +1,13 @@
+{
+  "requirement_id": "R1",
+  "title": "Added task survives reload",
+  "description": "Add the first allowed task title, reload the page, and check that the Tasks region still contains that exact title.",
+  "expectation": {
+    "kind": "region_text_exact",
+    "text": "Prepare hackathon demo",
+    "region": "Tasks"
+  },
+  "test_data": [
+    "Prepare hackathon demo"
+  ]
+}

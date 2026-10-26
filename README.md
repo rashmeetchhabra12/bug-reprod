@@ -9,10 +9,10 @@ the expectation, and writes a report plus screenshots into a unique run
 directory. After a manual fix, the same recipe can be replayed against another
 local URL.
 
-> **Phase 3 status: two fixtures, a persistent agent workflow, and a portable
-> HTML evidence report.** The Alan session can still drive a browser one action
-> at a time through local commands. There is no automatic bug discovery, no
-> automatic fix and no direct model API integration.
+> **Phase 4 status: bounded, requirement-guided exploration.** The Alan session
+> can now start from user-authored requirements instead of a known bug, propose
+> scenarios, freeze one expectation per scenario, and record classified findings
+> with replay confirmation. Reproduction and replay are unchanged.
 
 ## What is implemented
 
@@ -37,8 +37,10 @@ local URL.
   stop`) returning machine-readable JSON, with optional recorded rationales.
 - A self-contained HTML report with embedded screenshots, a three-way
   comparison and fingerprint-mismatch warnings.
-- Explicit scripted mechanics checks: buggy build fails, fixed build passes,
-  execution errors stay distinct from expectation failures.
+- Requirement-guided exploration: a validated spec, up to 3 scenarios, a
+  60-action exploration budget, five conservative finding classifications,
+  replay confirmation, and an exploration HTML report.
+- Explicit scripted mechanics checks for every layer.
 
 The full operator workflow, including a reusable investigation prompt, is in
 [`docs/ALAN_WORKFLOW.md`](docs/ALAN_WORKFLOW.md).
@@ -52,6 +54,8 @@ The full operator workflow, including a reusable investigation prompt, is in
 - Non-loopback targets.
 - Arbitrary code, shell or filesystem endpoints on the service.
 - A general assertion language; only two explicit expectation kinds exist.
+- Blind bug discovery. Explorations are bounded and requirement-guided; the
+  live demonstrations are known-app.
 
 ## Setup (Windows 11, PowerShell 5.1)
 
@@ -240,6 +244,66 @@ different recipe fingerprints, different expectation fingerprints, missing
 fingerprints, or a replay not labelled `recorded-replay`. Only the runs passed
 on the command line are included.
 
+## Requirement-guided exploration (Phase 4)
+
+Instead of a bug report, supply expected behaviours and allowed test data.
+`examples/task-exploration.json` has two requirements (`R1`, `R2`) and two
+allowed task titles.
+
+```powershell
+.\.venv\Scripts\bugrepro.exe explore start `
+  --spec-file examples\task-exploration.json `
+  --driver alan-agent `
+  --model deepseek/deepseek-v4.1-flash `
+  --label live-task-buggy
+```
+
+Then, for each proposed scenario, freeze its expectation and run it:
+
+```powershell
+.\.venv\Scripts\bugrepro.exe explore scenario start `
+  --exploration <id> --scenario-file examples\task-scenario-r1.json
+
+.\.venv\Scripts\bugrepro.exe agent observe --session <scenario-session>
+.\.venv\Scripts\bugrepro.exe agent act --session <scenario-session> `
+  --action-file action.json --rationale-file rationale.txt
+
+.\.venv\Scripts\bugrepro.exe explore scenario finish --exploration <id> --scenario S1
+.\.venv\Scripts\bugrepro.exe explore scenario export --exploration <id> --scenario S1
+.\.venv\Scripts\bugrepro.exe explore scenario confirm --exploration <id> --scenario S1
+.\.venv\Scripts\bugrepro.exe explore finish --exploration <id>
+```
+
+To test the same requirements on another build, pass `--target` to
+`explore start`; the override is recorded next to the original spec target.
+
+Classifications:
+
+| Classification | Meaning |
+| --- | --- |
+| `violation` | Frozen expectation failed and the same observation recurred in replay. |
+| `possible_issue` | Failed once, not confirmed or did not recur. Needs human review. |
+| `no_violation` | Expectation observed in that scenario. Not a bug-free claim. |
+| `execution_error` | Action failure, timeout or browser crash. Never a product bug. |
+| `not_evaluated` | Not finished, budget exhausted, or the check could not run. |
+
+Limits: at most 3 scenarios, at most 60 browser actions (including replay
+confirmation), 20 actions per scenario, loopback targets only. Requirements are
+recorded unchanged; a scenario may not invent one. A requirement that cannot be
+checked with `heading_text` or `region_text_exact` stays not evaluated.
+
+Generate the exploration report:
+
+```powershell
+.\.venv\Scripts\bugrepro.exe report `
+  --exploration runs\<exploration-dir> `
+  --output runs\exploration-report.html
+```
+
+It shows requirements, scenarios, classifications, findings with replay
+confirmation, untested requirements, and full action/screenshot evidence. It is
+static and includes only the selected exploration.
+
 ## Scripted verification
 
 ```powershell
@@ -268,6 +332,10 @@ anything in them.
 passing on fixed mode, and fresh-context task isolation.
 `tests/test_html_report.py` covers HTML escaping, embedded images, selected-run
 filtering and fingerprint-mismatch warnings.
+`tests/test_exploration.py` covers exploration spec limits, requirement
+immutability, allowed-action/test-data enforcement, action-budget exhaustion,
+execution errors not becoming findings, replay confirmation, and the
+exploration HTML report.
 
 ## How it works (beginner view)
 
@@ -339,17 +407,18 @@ src/bugrepro/
   check.py           expectation evaluation -> passed/failed/error
   runner.py          scripted execution, run directories, run.json
   report.py          Markdown report renderer
-  html_report.py     self-contained HTML evidence report + comparison
+  html_report.py     self-contained HTML report (runs and explorations)
   agent_client.py    service state file + JSON-over-HTTP client
   service.py         persistent local service (worker thread, HTTP, auth)
   investigation.py   one investigation: freeze, record, budget, finish, export
+  exploration.py     bounded requirement-guided exploration and classification
   sample_app/        account-switching fixture
   task_app/          task-list fixture (reload persistence)
 recipes/             saved recipes
-examples/            live reports, expectations and action files
-tests/               validation, safety, mechanics, service and report tests
+examples/            reports, expectations, action files and exploration specs
+tests/               validation, safety, mechanics, service, report, exploration
 docs/PROGRESS.md     status, model-connection findings, live-run results
-docs/ALAN_WORKFLOW.md operator workflow and reusable investigation prompt
+docs/ALAN_WORKFLOW.md operator workflow and reusable prompts
 ```
 
 ## Model connection

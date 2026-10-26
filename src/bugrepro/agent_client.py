@@ -167,6 +167,61 @@ class AgentClient:
     def close(self, session_id: str) -> dict[str, Any]:
         return self._request("POST", f"/sessions/{session_id}/close", {})
 
+    # ---------------------------------------------------------- explorations
+    def start_exploration(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._request("POST", "/explorations", payload)
+
+    def exploration_status(self, exploration_id: str) -> dict[str, Any]:
+        return self._request("GET", f"/explorations/{exploration_id}")
+
+    def finish_exploration(self, exploration_id: str) -> dict[str, Any]:
+        return self._request(
+            "POST", f"/explorations/{exploration_id}/finish", {}
+        )
+
+    def start_scenario(
+        self, exploration_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST", f"/explorations/{exploration_id}/scenarios", payload
+        )
+
+    def finish_scenario(
+        self, exploration_id: str, scenario_id: str
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            f"/explorations/{exploration_id}/scenarios/{scenario_id}/finish",
+            {},
+        )
+
+    def export_scenario(
+        self, exploration_id: str, scenario_id: str
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            f"/explorations/{exploration_id}/scenarios/{scenario_id}/export",
+            {},
+        )
+
+    def confirm_scenario(
+        self, exploration_id: str, scenario_id: str
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            f"/explorations/{exploration_id}/scenarios/{scenario_id}/confirm",
+            {},
+        )
+
+    def close_scenario(
+        self, exploration_id: str, scenario_id: str
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            f"/explorations/{exploration_id}/scenarios/{scenario_id}/close",
+            {},
+        )
+
     def shutdown(self) -> dict[str, Any]:
         return self._request("POST", "/shutdown", {})
 

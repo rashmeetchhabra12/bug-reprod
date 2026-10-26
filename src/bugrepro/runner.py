@@ -2,6 +2,9 @@
 
 Run directories are created exclusively and never reused, so output from
 separate invocations cannot silently overwrite earlier evidence.
+
+Both a standalone run and a replay through the service's Playwright host use
+the same recording loop; only the browser-context construction differs.
 """
 
 from __future__ import annotations
@@ -18,7 +21,7 @@ from typing import Any
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
-from .browser import BrowserSession, BrowserStartupError, Observation
+from .browser import BrowserSession, BrowserStartupError, Observation, PlaywrightHost
 from .check import CheckResult, evaluate_expectation
 from .recipe import Recipe, load_recipe, recipe_fingerprint, write_recipe
 from .report import render_report
@@ -116,195 +119,144 @@ def resolve_recipe_source(target: str | Path) -> tuple[Recipe, Path]:
     return load_recipe(path), path
 
 
-def execute_recipe(
+def _run_actions(
     *,
+    session: BrowserSession,
     recipe: Recipe,
-    base_url: str,
-    run_root: str | Path = "runs",
-    invocation: str = "run",
-    driver: str | None = None,
-    label: str | None = None,
-    headless: bool = True,
-    timeout_ms: int = 10_000,
-) -> RunResult:
-    """Run all actions, then evaluate the recipe's expectation once."""
-    if timeout_ms <= 0:
-        raise ValueError("timeout_ms must be positive.")
-    if driver is None:
-        driver = "recorded-replay" if invocation == "replay" else "scripted-test"
-    if driver not in {"recorded-replay", "scripted-test"}:
-        raise ValueError("execute_recipe only supports scripted drivers.")
-    base = validate_base_url(base_url)
-    started_at = _iso(_utc_now())
-    run_dir = allocate_run_dir(
-        run_root,
-        label=label or recipe.name,
-        invocation=invocation,
-    )
-    evidence_dir = run_dir / "evidence"
-    evidence_dir.mkdir()
-
-    recipe_path = run_dir / "recipe.json"
-    write_recipe(recipe_path, recipe)
-    recipe_hash = recipe_fingerprint(recipe)
-    expectation_fingerprint = recipe.expectation.fingerprint()
-
+    evidence_dir: Path,
+    timeout_ms: int,
+) -> tuple[
+    list[ActionRecord],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    CheckResult,
+]:
+    """Execute all actions in an already-open session and evaluate the check."""
     records: list[ActionRecord] = []
     action_failures: list[dict[str, Any]] = []
     execution_errors: list[dict[str, Any]] = []
-    check = CheckResult(
-        status="error",
-        expected=recipe.expectation.text,
-        observed=[],
-        reason="The check was not evaluated.",
-        duration_ms=0,
-    )
 
-    try:
-        with BrowserSession(
-            base_url=base,
-            headless=headless,
-            timeout_ms=timeout_ms,
-        ) as session:
-            for index, action in enumerate(recipe.actions, start=1):
-                action_started = time.perf_counter()
-                try:
-                    observation: Observation = session.perform(action)
-                except (PlaywrightTimeoutError, PlaywrightError) as exc:
-                    if session.blocked_requests:
-                        execution_errors.append(
-                            {
-                                "stage": f"action {index} ({action.type})",
-                                "error": (
-                                    "Blocked non-loopback request(s) during the "
-                                    "action: "
-                                    + ", ".join(session.blocked_requests[:3])
-                                ),
-                            }
-                        )
-                    else:
-                        action_failures.append(
-                            {
-                                "index": index,
-                                "type": action.type,
-                                "category": "action_failure",
-                                "error": str(exc),
-                            }
-                        )
-                    failure_shot = capture_failure_screenshot(
-                        session, evidence_dir, index
-                    )
-                    failure_observation = safe_observe(session)
-                    records.append(
-                        ActionRecord(
-                            index=index,
-                            type=action.type,
-                            input=action.to_dict(),
-                            status="failed",
-                            duration_ms=int(
-                                (time.perf_counter() - action_started) * 1000
-                            ),
-                            observation=(
-                                failure_observation.to_dict()
-                                if failure_observation
-                                else None
-                            ),
-                            error=str(exc),
-                            screenshot=failure_shot,
-                        )
-                    )
-                    break
-                except Exception as exc:  # noqa: BLE001 - unexpected execution fault
-                    execution_errors.append(
-                        {
-                            "stage": f"action {index} ({action.type})",
-                            "error": f"{type(exc).__name__}: {exc}",
-                        }
-                    )
-                    records.append(
-                        ActionRecord(
-                            index=index,
-                            type=action.type,
-                            input=action.to_dict(),
-                            status="failed",
-                            duration_ms=int(
-                                (time.perf_counter() - action_started) * 1000
-                            ),
-                            error=str(exc),
-                        )
-                    )
-                    break
-
-                screenshot_rel = capture_screenshot(
-                    session,
-                    evidence_dir,
-                    index,
-                    action,
-                    execution_errors,
-                )
-                records.append(
-                    ActionRecord(
-                        index=index,
-                        type=action.type,
-                        input=action.to_dict(),
-                        status="ok",
-                        duration_ms=int(
-                            (time.perf_counter() - action_started) * 1000
+    for index, action in enumerate(recipe.actions, start=1):
+        action_started = time.perf_counter()
+        try:
+            observation: Observation = session.perform(action)
+        except (PlaywrightTimeoutError, PlaywrightError) as exc:
+            if session.blocked_requests:
+                execution_errors.append(
+                    {
+                        "stage": f"action {index} ({action.type})",
+                        "error": (
+                            "Blocked non-loopback request(s) during the "
+                            "action: "
+                            + ", ".join(session.blocked_requests[:3])
                         ),
-                        observation=observation.to_dict(),
-                        screenshot=screenshot_rel,
-                    )
-                )
-
-            if not action_failures and not execution_errors:
-                check = evaluate_expectation(
-                    session.page, recipe.expectation, timeout_ms
+                    }
                 )
             else:
-                check = CheckResult(
-                    status="error",
-                    expected=recipe.expectation.text,
-                    observed=[],
-                    reason=(
-                        "Not evaluated because the run recorded "
-                        f"{len(action_failures)} action failure(s) and "
-                        f"{len(execution_errors)} execution error(s). "
-                        "An execution error is not proof that the reported "
-                        "application bug was reproduced."
-                    ),
-                    duration_ms=0,
+                action_failures.append(
+                    {
+                        "index": index,
+                        "type": action.type,
+                        "category": "action_failure",
+                        "error": str(exc),
+                    }
                 )
-    except BrowserStartupError as exc:
-        execution_errors.append({"stage": "browser_startup", "error": str(exc)})
-        check = CheckResult(
-            status="error",
-            expected=recipe.expectation.text,
-            observed=[],
-            reason=(
-                "Not evaluated because the browser could not start. "
-                "This is not evidence of the reported bug."
-            ),
-            duration_ms=0,
+            failure_shot = capture_failure_screenshot(
+                session, evidence_dir, index
+            )
+            failure_observation = safe_observe(session)
+            records.append(
+                ActionRecord(
+                    index=index,
+                    type=action.type,
+                    input=action.to_dict(),
+                    status="failed",
+                    duration_ms=int((time.perf_counter() - action_started) * 1000),
+                    observation=(
+                        failure_observation.to_dict()
+                        if failure_observation
+                        else None
+                    ),
+                    error=str(exc),
+                    screenshot=failure_shot,
+                )
+            )
+            break
+        except Exception as exc:  # noqa: BLE001 - unexpected execution fault
+            execution_errors.append(
+                {
+                    "stage": f"action {index} ({action.type})",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+            records.append(
+                ActionRecord(
+                    index=index,
+                    type=action.type,
+                    input=action.to_dict(),
+                    status="failed",
+                    duration_ms=int((time.perf_counter() - action_started) * 1000),
+                    error=str(exc),
+                )
+            )
+            break
+
+        screenshot_rel = capture_screenshot(
+            session,
+            evidence_dir,
+            index,
+            action,
+            execution_errors,
         )
-    except Exception as exc:  # noqa: BLE001 - always produce a report
-        execution_errors.append(
-            {
-                "stage": "run",
-                "error": f"{type(exc).__name__}: {exc}",
-                "traceback": traceback.format_exc(),
-            }
-        )
-        check = CheckResult(
-            status="error",
-            expected=recipe.expectation.text,
-            observed=[],
-            reason=(
-                "Not evaluated because the run failed unexpectedly. "
-                "This is not evidence of the reported bug."
-            ),
-            duration_ms=0,
+        records.append(
+            ActionRecord(
+                index=index,
+                type=action.type,
+                input=action.to_dict(),
+                status="ok",
+                duration_ms=int((time.perf_counter() - action_started) * 1000),
+                observation=observation.to_dict(),
+                screenshot=screenshot_rel,
+            )
         )
 
+    if not action_failures and not execution_errors:
+        check = evaluate_expectation(
+            session.page, recipe.expectation, timeout_ms
+        )
+    else:
+        check = CheckResult(
+            status="error",
+            expected=recipe.expectation.text,
+            observed=[],
+            reason=(
+                "Not evaluated because the run recorded "
+                f"{len(action_failures)} action failure(s) and "
+                f"{len(execution_errors)} execution error(s). "
+                "An execution error is not proof that the reported "
+                "application bug was reproduced."
+            ),
+            duration_ms=0,
+        )
+    return records, action_failures, execution_errors, check
+
+
+def _finalize_run(
+    *,
+    base: str,
+    recipe: Recipe,
+    run_dir: Path,
+    recipe_path: Path,
+    recipe_hash: str,
+    expectation_fingerprint: str,
+    started_at: str,
+    records: list[ActionRecord],
+    action_failures: list[dict[str, Any]],
+    execution_errors: list[dict[str, Any]],
+    check: CheckResult,
+    driver: str,
+    invocation: str,
+) -> RunResult:
     finished_at = _iso(_utc_now())
     run_document: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
@@ -356,6 +308,252 @@ def execute_recipe(
         check=check,
         report_path=report_path,
         run_json_path=run_json_path,
+    )
+
+
+def _prepare_run(
+    *,
+    recipe: Recipe,
+    base_url: str,
+    run_root: str | Path,
+    invocation: str,
+    driver: str | None,
+    label: str | None,
+) -> tuple[str, str, Path, Path, str, str, str]:
+    base = validate_base_url(base_url)
+    if driver is None:
+        driver = "recorded-replay" if invocation == "replay" else "scripted-test"
+    if driver not in {"recorded-replay", "scripted-test"}:
+        raise ValueError("execute_recipe only supports scripted drivers.")
+    started_at = _iso(_utc_now())
+    run_dir = allocate_run_dir(
+        run_root,
+        label=label or recipe.name,
+        invocation=invocation,
+    )
+    evidence_dir = run_dir / "evidence"
+    evidence_dir.mkdir()
+    recipe_path = run_dir / "recipe.json"
+    write_recipe(recipe_path, recipe)
+    return (
+        base,
+        driver,
+        run_dir,
+        evidence_dir,
+        started_at,
+        recipe_fingerprint(recipe),
+        recipe.expectation.fingerprint(),
+    )
+
+
+def execute_recipe(
+    *,
+    recipe: Recipe,
+    base_url: str,
+    run_root: str | Path = "runs",
+    invocation: str = "run",
+    driver: str | None = None,
+    label: str | None = None,
+    headless: bool = True,
+    timeout_ms: int = 10_000,
+) -> RunResult:
+    """Run all actions in a new browser, then evaluate the expectation once."""
+    if timeout_ms <= 0:
+        raise ValueError("timeout_ms must be positive.")
+    (
+        base,
+        actual_driver,
+        run_dir,
+        evidence_dir,
+        started_at,
+        recipe_hash,
+        expectation_fingerprint,
+    ) = _prepare_run(
+        recipe=recipe,
+        base_url=base_url,
+        run_root=run_root,
+        invocation=invocation,
+        driver=driver,
+        label=label,
+    )
+    recipe_path = run_dir / "recipe.json"
+
+    records: list[ActionRecord] = []
+    action_failures: list[dict[str, Any]] = []
+    execution_errors: list[dict[str, Any]] = []
+    check = CheckResult(
+        status="error",
+        expected=recipe.expectation.text,
+        observed=[],
+        reason="The check was not evaluated.",
+        duration_ms=0,
+    )
+
+    try:
+        with BrowserSession(
+            base_url=base,
+            headless=headless,
+            timeout_ms=timeout_ms,
+        ) as session:
+            records, action_failures, execution_errors, check = _run_actions(
+                session=session,
+                recipe=recipe,
+                evidence_dir=evidence_dir,
+                timeout_ms=timeout_ms,
+            )
+    except BrowserStartupError as exc:
+        execution_errors.append({"stage": "browser_startup", "error": str(exc)})
+        check = CheckResult(
+            status="error",
+            expected=recipe.expectation.text,
+            observed=[],
+            reason=(
+                "Not evaluated because the browser could not start. "
+                "This is not evidence of the reported bug."
+            ),
+            duration_ms=0,
+        )
+    except Exception as exc:  # noqa: BLE001 - always produce a report
+        execution_errors.append(
+            {
+                "stage": "run",
+                "error": f"{type(exc).__name__}: {exc}",
+                "traceback": traceback.format_exc(),
+            }
+        )
+        check = CheckResult(
+            status="error",
+            expected=recipe.expectation.text,
+            observed=[],
+            reason=(
+                "Not evaluated because the run failed unexpectedly. "
+                "This is not evidence of the reported bug."
+            ),
+            duration_ms=0,
+        )
+
+    return _finalize_run(
+        base=base,
+        recipe=recipe,
+        run_dir=run_dir,
+        recipe_path=recipe_path,
+        recipe_hash=recipe_hash,
+        expectation_fingerprint=expectation_fingerprint,
+        started_at=started_at,
+        records=records,
+        action_failures=action_failures,
+        execution_errors=execution_errors,
+        check=check,
+        driver=actual_driver,
+        invocation=invocation,
+    )
+
+
+def execute_recipe_with_host(
+    *,
+    recipe: Recipe,
+    base_url: str,
+    host: PlaywrightHost,
+    run_root: str | Path = "runs",
+    invocation: str = "replay",
+    driver: str = "recorded-replay",
+    label: str | None = None,
+    timeout_ms: int = 10_000,
+) -> RunResult:
+    """Replay a recipe in a fresh context on an existing service-owned browser.
+
+    Used for replay confirmation so the worker thread does not start a second
+    Playwright instance. The browser context is still new and isolated.
+    """
+    if timeout_ms <= 0:
+        raise ValueError("timeout_ms must be positive.")
+    if driver != "recorded-replay":
+        raise ValueError("A service-hosted replay must use recorded-replay.")
+    (
+        base,
+        actual_driver,
+        run_dir,
+        evidence_dir,
+        started_at,
+        recipe_hash,
+        expectation_fingerprint,
+    ) = _prepare_run(
+        recipe=recipe,
+        base_url=base_url,
+        run_root=run_root,
+        invocation=invocation,
+        driver=driver,
+        label=label,
+    )
+    recipe_path = run_dir / "recipe.json"
+
+    records: list[ActionRecord] = []
+    action_failures: list[dict[str, Any]] = []
+    execution_errors: list[dict[str, Any]] = []
+    check = CheckResult(
+        status="error",
+        expected=recipe.expectation.text,
+        observed=[],
+        reason="The check was not evaluated.",
+        duration_ms=0,
+    )
+    try:
+        with BrowserSession(
+            base_url=base,
+            timeout_ms=timeout_ms,
+            host=host,
+        ) as session:
+            records, action_failures, execution_errors, check = _run_actions(
+                session=session,
+                recipe=recipe,
+                evidence_dir=evidence_dir,
+                timeout_ms=timeout_ms,
+            )
+    except BrowserStartupError as exc:
+        execution_errors.append({"stage": "browser_startup", "error": str(exc)})
+        check = CheckResult(
+            status="error",
+            expected=recipe.expectation.text,
+            observed=[],
+            reason=(
+                "Not evaluated because a replay context could not start. "
+                "This is not evidence of the reported bug."
+            ),
+            duration_ms=0,
+        )
+    except Exception as exc:  # noqa: BLE001 - always produce a report
+        execution_errors.append(
+            {
+                "stage": "replay",
+                "error": f"{type(exc).__name__}: {exc}",
+                "traceback": traceback.format_exc(),
+            }
+        )
+        check = CheckResult(
+            status="error",
+            expected=recipe.expectation.text,
+            observed=[],
+            reason=(
+                "Not evaluated because the replay failed unexpectedly. "
+                "This is not evidence of the reported bug."
+            ),
+            duration_ms=0,
+        )
+
+    return _finalize_run(
+        base=base,
+        recipe=recipe,
+        run_dir=run_dir,
+        recipe_path=recipe_path,
+        recipe_hash=recipe_hash,
+        expectation_fingerprint=expectation_fingerprint,
+        started_at=started_at,
+        records=records,
+        action_failures=action_failures,
+        execution_errors=execution_errors,
+        check=check,
+        driver=actual_driver,
+        invocation=invocation,
     )
 
 

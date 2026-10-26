@@ -73,13 +73,19 @@ class Investigation:
         session_id: str,
         run_dir: Path,
         base_url: str,
-        bug_report: str,
+        bug_report: str | None,
         expectation: Expectation,
         driver: str,
         model: dict[str, str],
         budget_limit: int,
         timeout_ms: int,
         session: BrowserSession,
+        requirement: dict[str, Any] | None = None,
+        scenario: dict[str, Any] | None = None,
+        exploration_id: str | None = None,
+        allowed_actions: frozenset[str] | None = None,
+        allowed_fill_texts: frozenset[str] | None = None,
+        invocation: str = "agent",
     ) -> None:
         if driver not in INVESTIGATION_DRIVERS:
             raise ValueError(f"unsupported investigation driver: {driver}")
@@ -94,6 +100,12 @@ class Investigation:
         self.budget_limit = budget_limit
         self.timeout_ms = timeout_ms
         self.session = session
+        self.requirement = requirement
+        self.scenario = scenario
+        self.exploration_id = exploration_id
+        self.allowed_actions = allowed_actions
+        self.allowed_fill_texts = allowed_fill_texts
+        self.invocation = invocation
 
         self.started_at = _iso()
         self.finished_at: str | None = None
@@ -123,7 +135,7 @@ class Investigation:
         *,
         session_id: str,
         base_url: str,
-        bug_report: str,
+        bug_report: str | None,
         expectation: Expectation,
         driver: str,
         model: dict[str, str],
@@ -133,6 +145,12 @@ class Investigation:
         label: str,
         headless: bool,
         host: PlaywrightHost | None = None,
+        requirement: dict[str, Any] | None = None,
+        scenario: dict[str, Any] | None = None,
+        exploration_id: str | None = None,
+        allowed_actions: frozenset[str] | None = None,
+        allowed_fill_texts: frozenset[str] | None = None,
+        invocation: str = "agent",
     ) -> "Investigation":
         session = BrowserSession(
             base_url=base_url,
@@ -150,7 +168,7 @@ class Investigation:
 
         try:
             run_dir = allocate_run_dir(
-                run_root, label=label or "investigation", invocation="agent"
+                run_root, label=label or "investigation", invocation=invocation
             )
             (run_dir / "evidence").mkdir()
         except Exception:
@@ -168,6 +186,12 @@ class Investigation:
             budget_limit=budget_limit,
             timeout_ms=timeout_ms,
             session=session,
+            requirement=requirement,
+            scenario=scenario,
+            exploration_id=exploration_id,
+            allowed_actions=allowed_actions,
+            allowed_fill_texts=allowed_fill_texts,
+            invocation=invocation,
         )
 
     # ------------------------------------------------------------- runtime
@@ -220,6 +244,24 @@ class Investigation:
     def execute_action(self, action: Action, rationale: str | None = None) -> dict[str, Any]:
         self._ensure_active("execute an action")
         self.touch()
+
+        if self.allowed_actions is not None and action.type not in self.allowed_actions:
+            raise InvestigationError(
+                f"Action type {action.type!r} is not allowed by the exploration "
+                "specification.",
+                code="action_not_allowed",
+                http_status=400,
+            )
+        if (
+            action.type == "fill"
+            and self.allowed_fill_texts is not None
+            and action.text not in self.allowed_fill_texts
+        ):
+            raise InvestigationError(
+                "Fill text is not in the exploration's allowed test data.",
+                code="test_data_not_allowed",
+                http_status=400,
+            )
 
         if self.budget_used >= self.budget_limit:
             self.budget_exhausted = True
@@ -642,17 +684,16 @@ class Investigation:
     # ------------------------------------------------------------ records
     def _run_document(self) -> dict[str, Any]:
         check = self.check or self._error_check("The attempt has not finished.")
-        return {
+        document: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
             "run_id": self.run_dir.name,
-            "invocation": "agent",
+            "invocation": self.invocation,
             "driver": self.driver,
             "model": self.model,
             "attempt_status": self.attempt_status,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "base_url": self.base_url,
-            "bug_report": self.bug_report,
             "expectation": {
                 **self.expectation.to_dict(),
                 "fingerprint": self.expectation.fingerprint(),
@@ -672,6 +713,15 @@ class Investigation:
             "export": self.export_summary(),
             "evidence": self.evidence_list(),
         }
+        if self.bug_report is not None:
+            document["bug_report"] = self.bug_report
+        if self.requirement is not None:
+            document["requirement"] = self.requirement
+        if self.scenario is not None:
+            document["scenario"] = self.scenario
+        if self.exploration_id is not None:
+            document["exploration_id"] = self.exploration_id
+        return document
 
     def _write_record(self) -> None:
         document = self._run_document()
