@@ -76,7 +76,7 @@ def test_same_scripted_recipe_fails_on_buggy_and_passes_on_fixed(
     assert buggy.report_path.is_file()
     assert fixed.report_path.is_file()
     buggy_report = buggy.report_path.read_text(encoding="utf-8")
-    assert "EXPECTATION FAILED - bug reproduced" in buggy_report
+    assert "EXPECTATION FAILED - expected result not observed" in buggy_report
     assert "Profile for Bob" in buggy_report
     assert "Profile for Alice" in buggy_report
 

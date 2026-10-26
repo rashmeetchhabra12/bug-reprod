@@ -56,6 +56,7 @@ class RunResult:
     run_id: str
     run_dir: Path
     invocation: str
+    driver: str
     base_url: str
     recipe: Recipe
     recipe_hash: str
@@ -119,6 +120,7 @@ def execute_recipe(
     base_url: str,
     run_root: str | Path = "runs",
     invocation: str = "run",
+    driver: str | None = None,
     label: str | None = None,
     headless: bool = True,
     timeout_ms: int = 10_000,
@@ -126,6 +128,10 @@ def execute_recipe(
     """Run all actions, then evaluate the recipe's expectation once."""
     if timeout_ms <= 0:
         raise ValueError("timeout_ms must be positive.")
+    if driver is None:
+        driver = "recorded-replay" if invocation == "replay" else "scripted-test"
+    if driver not in {"recorded-replay", "scripted-test"}:
+        raise ValueError("execute_recipe only supports scripted drivers.")
     base = validate_base_url(base_url)
     started_at = _iso(_utc_now())
     run_dir = allocate_run_dir(
@@ -183,10 +189,10 @@ def execute_recipe(
                                 "error": str(exc),
                             }
                         )
-                    failure_shot = _capture_failure_screenshot(
+                    failure_shot = capture_failure_screenshot(
                         session, evidence_dir, index
                     )
-                    failure_observation = _safe_observe(session)
+                    failure_observation = safe_observe(session)
                     records.append(
                         ActionRecord(
                             index=index,
@@ -227,7 +233,7 @@ def execute_recipe(
                     )
                     break
 
-                screenshot_rel = _capture_screenshot(
+                screenshot_rel = capture_screenshot(
                     session,
                     evidence_dir,
                     index,
@@ -302,6 +308,7 @@ def execute_recipe(
         "schema_version": SCHEMA_VERSION,
         "run_id": run_dir.name,
         "invocation": invocation,
+        "driver": driver,
         "started_at": started_at,
         "finished_at": finished_at,
         "base_url": base,
@@ -334,6 +341,7 @@ def execute_recipe(
         run_id=run_dir.name,
         run_dir=run_dir,
         invocation=invocation,
+        driver=driver,
         base_url=base,
         recipe=recipe,
         recipe_hash=recipe_hash,
@@ -349,21 +357,21 @@ def execute_recipe(
     )
 
 
-def _screenshot_name(index: int, action: Any) -> str:
+def screenshot_name(index: int, action: Any) -> str:
     suffix = action.label if action.type == "screenshot" else action.type
     return f"{index:02d}-{suffix}.png"
 
 
-def _capture_screenshot(
+def capture_screenshot(
     session: BrowserSession,
     evidence_dir: Path,
     index: int,
     action: Any,
     execution_errors: list[dict[str, Any]],
 ) -> str | None:
-    relative = f"evidence/{_screenshot_name(index, action)}"
+    relative = f"evidence/{screenshot_name(index, action)}"
     try:
-        session.screenshot(evidence_dir / _screenshot_name(index, action))
+        session.screenshot(evidence_dir / screenshot_name(index, action))
         return relative
     except Exception as exc:  # noqa: BLE001 - screenshot is evidence, not control flow
         execution_errors.append(
@@ -375,7 +383,7 @@ def _capture_screenshot(
         return None
 
 
-def _capture_failure_screenshot(
+def capture_failure_screenshot(
     session: BrowserSession, evidence_dir: Path, index: int
 ) -> str | None:
     name = f"{index:02d}-failure.png"
@@ -386,7 +394,7 @@ def _capture_failure_screenshot(
         return None
 
 
-def _safe_observe(session: BrowserSession) -> Observation | None:
+def safe_observe(session: BrowserSession) -> Observation | None:
     try:
         return session.observe()
     except Exception:  # noqa: BLE001 - diagnostics are best effort

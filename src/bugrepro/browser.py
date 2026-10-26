@@ -1,14 +1,18 @@
-"""Playwright browser session used by both investigation and replay.
+"""Playwright browser sessions used by one-shot runs and the agent service.
+
+There is exactly one execution engine: :class:`BrowserSession`. A normal run
+owns its browser; the persistent service owns a :class:`PlaywrightHost` and
+gives each investigation a fresh context from it. All Playwright calls for a
+host must happen on the thread that started it.
 
 The session only executes validated :class:`~bugrepro.recipe.Action` objects.
-It never evaluates model-generated Python or JavaScript. Every run gets a
-fresh browser context, every operation has a finite timeout, and cleanup is
-guaranteed by the context manager.
+It never evaluates model-generated Python or JavaScript.
 """
 
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -73,8 +77,76 @@ class Observation:
         }
 
 
+class PlaywrightHost:
+    """Owns one Chromium instance for a small group of isolated contexts.
+
+    The service creates and uses this object on a single worker thread. The
+    thread guard makes accidental cross-thread Playwright use fail loudly.
+    """
+
+    def __init__(self, *, headless: bool = True) -> None:
+        self.headless = headless
+        self._playwright: Playwright | None = None
+        self._browser: Browser | None = None
+        self._thread_id: int | None = None
+
+    def start(self) -> "PlaywrightHost":
+        if self._browser is not None:
+            return self
+        try:
+            self._thread_id = threading.get_ident()
+            self._playwright = sync_playwright().start()
+            self._browser = self._playwright.chromium.launch(headless=self.headless)
+        except Exception as exc:  # noqa: BLE001 - normalized into a startup error
+            self.close()
+            raise BrowserStartupError(
+                "Could not start Chromium. If this is a fresh environment, run "
+                f"'python -m playwright install chromium'. Details: {exc}"
+            ) from exc
+        return self
+
+    def _assert_owning_thread(self) -> None:
+        if self._thread_id is not None and threading.get_ident() != self._thread_id:
+            raise RuntimeError(
+                "PlaywrightHost must be used from the thread that started it."
+            )
+
+    def new_context(self, *, timeout_ms: int) -> BrowserContext:
+        self._assert_owning_thread()
+        if self._browser is None:
+            raise BrowserStartupError("Browser host has not been started.")
+        context = self._browser.new_context()
+        context.set_default_timeout(timeout_ms)
+        context.set_default_navigation_timeout(timeout_ms * 2)
+        return context
+
+    def is_connected(self) -> bool:
+        try:
+            return self._browser is not None and self._browser.is_connected()
+        except Exception:  # noqa: BLE001 - a dead browser is simply not connected
+            return False
+
+    def close(self) -> None:
+        for resource, method in (
+            (self._browser, "close"),
+            (self._playwright, "stop"),
+        ):
+            if resource is None:
+                continue
+            try:
+                getattr(resource, method)()
+            except Exception:  # noqa: BLE001 - cleanup must not mask results
+                pass
+        self._browser = None
+        self._playwright = None
+
+
 class BrowserSession:
-    """A single fresh browser context bound to one validated loopback base URL."""
+    """A single fresh browser context bound to one validated loopback base URL.
+
+    Pass ``host`` to reuse a service-owned browser; the session still creates a
+    brand-new context. Without a host the session owns a short-lived browser.
+    """
 
     def __init__(
         self,
@@ -82,32 +154,36 @@ class BrowserSession:
         base_url: str,
         headless: bool = True,
         timeout_ms: int = 10_000,
+        host: PlaywrightHost | None = None,
     ) -> None:
         self.base_url = validate_base_url(base_url)
         self.headless = headless
         self.timeout_ms = timeout_ms
-        self._playwright: Playwright | None = None
-        self._browser: Browser | None = None
+        self._external_host = host
+        self._owned_host: PlaywrightHost | None = None
+        self._host = host
         self._context: BrowserContext | None = None
         self.page: Page | None = None
         self.blocked_requests: list[str] = []
 
     def __enter__(self) -> "BrowserSession":
         try:
-            self._playwright = sync_playwright().start()
-            self._browser = self._playwright.chromium.launch(headless=self.headless)
-            self._context = self._browser.new_context()
-            self._context.set_default_timeout(self.timeout_ms)
-            self._context.set_default_navigation_timeout(self.timeout_ms * 2)
+            if self._host is None:
+                self._owned_host = PlaywrightHost(headless=self.headless).start()
+                self._host = self._owned_host
+            self._context = self._host.new_context(timeout_ms=self.timeout_ms)
             # A local app must not be able to bounce the browser to the internet
             # or load remote subresources. Every request is checked.
             self._context.route("**/*", self._guard_route)
             self.page = self._context.new_page()
+        except BrowserStartupError:
+            self.close()
+            raise
         except Exception as exc:  # noqa: BLE001 - normalized into a startup error
             self.close()
             raise BrowserStartupError(
-                "Could not start Chromium. If this is a fresh environment, run "
-                f"'python -m playwright install chromium'. Details: {exc}"
+                "Could not start a browser context. "
+                f"Details: {exc}"
             ) from exc
         return self
 
@@ -123,22 +199,27 @@ class BrowserSession:
         self.close()
 
     def close(self) -> None:
-        """Close page context, browser and Playwright, ignoring cleanup noise."""
-        for resource, method in (
-            (self._context, "close"),
-            (self._browser, "close"),
-            (self._playwright, "stop"),
-        ):
-            if resource is None:
-                continue
+        """Close this context; close the browser only if this session owns it."""
+        if self._context is not None:
             try:
-                getattr(resource, method)()
-            except Exception:  # noqa: BLE001 - cleanup must never mask the run result
+                self._context.close()
+            except Exception:  # noqa: BLE001 - cleanup must never mask the result
                 pass
         self.page = None
         self._context = None
-        self._browser = None
-        self._playwright = None
+        if self._owned_host is not None:
+            self._owned_host.close()
+            self._owned_host = None
+            self._host = None
+
+    def is_healthy(self) -> bool:
+        """True when the page and its browser are still usable."""
+        if self.page is None or self._host is None:
+            return False
+        try:
+            return not self.page.is_closed() and self._host.is_connected()
+        except Exception:  # noqa: BLE001 - treat any check failure as unhealthy
+            return False
 
     def _require_page(self) -> Page:
         if self.page is None:

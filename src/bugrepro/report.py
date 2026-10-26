@@ -1,8 +1,8 @@
-"""Readable Markdown report for a run.
+"""Readable Markdown report for a run or an agent investigation.
 
 The report is generated from the immutable run record. It always shows the
-expectation verbatim and keeps action failures, execution errors and the
-expectation result visibly separate.
+expectation verbatim and keeps action failures, execution errors, budget state
+and the expectation result visibly separate.
 """
 
 from __future__ import annotations
@@ -12,15 +12,16 @@ from typing import Any
 
 VERDICTS = {
     "passed": "CHECK PASSED",
-    "failed": "EXPECTATION FAILED - bug reproduced",
+    "failed": "EXPECTATION FAILED - expected result not observed",
     "error": "EXECUTION ERROR - inconclusive",
 }
 
 VERDICT_NOTES = {
     "passed": "The page satisfied the recorded expectation.",
     "failed": (
-        "The expectation was evaluated and the page did not meet it. "
-        "In the sample scenario this is the reproduced bug."
+        "The expectation was evaluated and the page did not meet it. This is an "
+        "assertion failure about the observed result, not by itself proof that "
+        "the reported bug was reproduced correctly."
     ),
     "error": (
         "The expectation could not be evaluated. This is not proof that the "
@@ -30,6 +31,8 @@ VERDICT_NOTES = {
 
 
 def _cell(value: Any, limit: int = 180) -> str:
+    if value is None:
+        return ""
     text = str(value).replace("\r", " ").replace("\n", " ")
     text = text.replace("|", "\\|")
     if len(text) > limit:
@@ -39,6 +42,40 @@ def _cell(value: Any, limit: int = 180) -> str:
 
 def _json_cell(value: Any, limit: int = 180) -> str:
     return _cell(json.dumps(value, ensure_ascii=False, sort_keys=True), limit)
+
+
+def _recipe_line(run: dict[str, Any]) -> str:
+    recipe = run.get("recipe") or {}
+    name = recipe.get("name") or "unknown"
+    count = recipe.get("action_count", len(run.get("actions") or []))
+    if recipe.get("sha256"):
+        return (
+            f"{_cell(name)} ({count} actions, "
+            f"{_cell(recipe['sha256'], 80)})"
+        )
+    return f"{_cell(name)} ({count} actions, recipe not exported)"
+
+
+def _provenance(run: dict[str, Any]) -> str:
+    driver = run.get("driver")
+    if driver == "alan-agent":
+        model = (run.get("model") or {}).get("id", "unknown")
+        return (
+            "Live agent investigation. The model chose each action through the "
+            "local service and every action was validated by the executor. The "
+            f"expectation was frozen before the first action. Model identity "
+            f"({_cell(model, 80)}) is session-reported, not provider-verified."
+        )
+    if driver == "scripted-test":
+        return (
+            "Scripted test. The action sequence was written in advance; no model "
+            "decisions were made."
+        )
+    if driver == "recorded-replay":
+        return "Scripted replay of a saved recipe. No model calls were made."
+    if run.get("invocation") == "replay":
+        return "Scripted replay of a saved recipe. No model calls were made."
+    return "Scripted recipe execution. No model was called in this run."
 
 
 def render_report(run: dict[str, Any]) -> str:
@@ -53,7 +90,7 @@ def render_report(run: dict[str, Any]) -> str:
         "",
         "## Expectation (fixed)",
         "",
-        "This expectation comes from the recipe and is never inferred from the "
+        "This expectation comes from human input and is never inferred from the "
         "actions or from the page.",
         "",
         "| Field | Value |",
@@ -62,20 +99,44 @@ def render_report(run: dict[str, Any]) -> str:
         f"| Heading text | {_cell(run['expectation']['text'])} |",
         f"| Heading level | {run['expectation']['level']} |",
         f"| Fingerprint | {_cell(run['expectation']['fingerprint'], 80)} |",
-        "",
-        "## Target",
-        "",
-        f"- Base URL: {_cell(run['base_url'])}",
-        f"- Invocation: {_cell(run['invocation'])}",
-        f"- Started: {_cell(run['started_at'])}",
-        f"- Finished: {_cell(run['finished_at'])}",
-        f"- Recipe: {_cell(run['recipe']['name'])} "
-        f"({run['recipe']['action_count']} actions, {_cell(run['recipe']['sha256'], 80)})",
-        "",
-        "## Actions",
-        "",
     ]
 
+    if run.get("expectation", {}).get("frozen_at"):
+        lines.append(
+            f"| Frozen at | {_cell(run['expectation']['frozen_at'])} |"
+        )
+
+    lines.extend(["", "## Target", ""])
+    lines.append(f"- Base URL: {_cell(run['base_url'])}")
+    lines.append(f"- Invocation: {_cell(run['invocation'])}")
+    if run.get("driver"):
+        lines.append(f"- Driver: {_cell(run['driver'])}")
+    model = run.get("model") or {}
+    if model.get("id"):
+        lines.append(
+            f"- Model: {_cell(model['id'])} "
+            f"(source: {_cell(model.get('source', 'unknown'), 40)})"
+        )
+    if run.get("attempt_status"):
+        lines.append(f"- Attempt status: {_cell(run['attempt_status'])}")
+    lines.append(f"- Started: {_cell(run['started_at'])}")
+    lines.append(f"- Finished: {_cell(run.get('finished_at') or 'not finished')}")
+    lines.append(f"- Recipe: {_recipe_line(run)}")
+
+    budget = run.get("budget")
+    if budget:
+        lines.append(
+            f"- Action budget: {budget.get('used', 0)} used / "
+            f"{budget.get('limit', 0)} allowed "
+            f"({budget.get('remaining', 0)} remaining)"
+        )
+
+    if run.get("bug_report"):
+        lines.extend(["", "## Bug report (supplied)", ""])
+        for line in str(run["bug_report"]).splitlines() or [""]:
+            lines.append(f"> {line}")
+
+    lines.extend(["", "## Actions", ""])
     if run["actions"]:
         lines.extend(
             [
@@ -134,11 +195,26 @@ def render_report(run: dict[str, Any]) -> str:
     else:
         lines.append("None.")
 
-    evidence = [
-        record["screenshot"]
-        for record in run["actions"]
-        if record.get("screenshot")
-    ]
+    export = run.get("export")
+    if export is not None:
+        lines.extend(["", "## Export", ""])
+        lines.append(f"- Available: {'yes' if export.get('available') else 'no'}")
+        if export.get("recipe_path"):
+            lines.append(
+                f"- Recipe: {_cell(export['recipe_path'])} "
+                f"({_cell(export.get('sha256'), 80)})"
+            )
+        if export.get("reason"):
+            lines.append(f"- Reason: {export['reason']}")
+
+    evidence: list[str] = []
+    for record in run["actions"]:
+        if record.get("screenshot"):
+            evidence.append(record["screenshot"])
+    for path in run.get("evidence") or []:
+        if path not in evidence:
+            evidence.append(path)
+
     lines.extend(["", "## Evidence", ""])
     if evidence:
         for path in evidence:
@@ -151,14 +227,11 @@ def render_report(run: dict[str, Any]) -> str:
             "",
             "## Provenance",
             "",
-            (
-                "Scripted recipe execution. No model was called in this run."
-                if run["invocation"] != "replay"
-                else "Scripted replay. No model calls were made."
-            ),
+            _provenance(run),
             "",
-            "A timeout or missing element is reported as an execution error; it does "
-            "not prove the reported application bug.",
+            "A timeout, missing element, budget exhaustion or browser crash is "
+            "reported as an execution error; it does not prove the reported "
+            "application bug.",
             "",
         ]
     )

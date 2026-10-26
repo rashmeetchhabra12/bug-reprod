@@ -9,9 +9,10 @@ with Playwright, records every action, checks the expectation, and writes a
 report plus screenshots into a unique run directory. After a manual fix, the
 same recipe can be replayed against another local URL.
 
-> **Phase 1 status: scripted foundation only.** There is no AI investigator,
-> no automatic bug discovery and no automatic fixing. The included demo bug is
-> deliberate, and the mechanics check is a human-written script.
+> **Phase 2 status: the Alan agent can drive a persistent browser session
+> through local commands.** The scripted Phase 1 path still works, and the
+> deliberate demo bug is still a fixed fixture. There is no automatic bug
+> discovery, no automatic fix and no direct model API integration.
 
 ## What is implemented
 
@@ -24,16 +25,22 @@ same recipe can be replayed against another local URL.
 - Structured run records, Markdown reports, screenshots, and non-overwriting
   run directories.
 - Replay of a saved recipe against a different local URL with no model calls.
-- Explicit scripted mechanics check: buggy build fails, fixed build passes,
+- A persistent local service that keeps one browser context alive across
+  separate CLI invocations, with token auth, an action budget, idle timeouts
+  and crash handling.
+- An agent-facing CLI (`agent start/observe/act/finish/export/status/close/
+  stop`) returning machine-readable JSON.
+- Explicit scripted mechanics checks: buggy build fails, fixed build passes,
   execution errors stay distinct from expectation failures.
 
 ## What is deliberately not implemented
 
-- An AI agent that chooses actions.
 - Automatic bug discovery or automatic patches.
-- A dashboard, auth system, database, multi-agent system or GitHub integration.
+- A direct model/provider API integration (the Alan session itself is the
+  decision maker; our local tools are the executor).
+- A dashboard, database service, multi-agent system or GitHub integration.
 - Non-loopback targets.
-- A provider integration for Alan or DeepSeek (see `docs/PROGRESS.md`).
+- Arbitrary code, shell or filesystem endpoints on the service.
 
 ## Setup (Windows 11, PowerShell 5.1)
 
@@ -126,6 +133,64 @@ Exit codes for `run` / `replay`:
 | 1 | Expectation failed (the reported bug was reproduced) |
 | 2 | Execution error / inconclusive |
 
+## Persistent agent service (Phase 2)
+
+The service owns Playwright on a background worker thread and keeps one
+browser context per investigation alive across separate CLI invocations. All
+browser operations are serialized on that thread. The HTTP surface binds to
+127.0.0.1 and requires a locally generated bearer token stored in a per-user
+state file outside the repository (`%LOCALAPPDATA%\BugRepro\service.json` by
+default on Windows). The token is never printed, passed as an argument or
+written into a run.
+
+Terminal 1:
+
+```powershell
+.\.venv\Scripts\bugrepro.exe agent serve
+```
+
+Terminal 2:
+
+```powershell
+.\.venv\Scripts\bugrepro.exe agent start `
+  --target http://127.0.0.1:8101 `
+  --report-file examples\live-bug-report.txt `
+  --expectation-file examples\live-expectation.json `
+  --driver alan-agent `
+  --model deepseek/deepseek-v4.1-flash `
+  --model-source session-reported `
+  --label live-alan-agent
+```
+
+The start response contains the `session_id`, the frozen expectation
+fingerprint and the action budget. Then, one step at a time:
+
+```powershell
+.\.venv\Scripts\bugrepro.exe agent observe --session <id>
+.\.venv\Scripts\bugrepro.exe agent act --session <id> --action-file <action.json>
+.\.venv\Scripts\bugrepro.exe agent status --session <id>
+.\.venv\Scripts\bugrepro.exe agent finish --session <id>
+.\.venv\Scripts\bugrepro.exe agent export --session <id>
+.\.venv\Scripts\bugrepro.exe agent close --session <id>
+.\.venv\Scripts\bugrepro.exe agent stop
+```
+
+Guarantees:
+
+- Each `agent start` creates a fresh browser context, so investigations are
+  isolated from each other and from scripted runs.
+- The expectation is validated and fingerprinted at start. The action endpoint
+  accepts no expectation field, and `export` preserves the original one.
+- An action budget (default 20, maximum 50), a per-session idle timeout and a
+  service idle timeout bound resource use.
+- Every action is validated by `recipe.py`; there is no selector, script,
+  shell or filesystem endpoint.
+- Budget exhaustion, action errors and browser crashes produce check status
+  `error`, never `failed`. Only a completed, error-free attempt can be
+  exported, and the full attempt remains in `run.json`.
+- `export` writes `recipe.json` inside the run directory. `replay` then runs
+  it against any loopback URL with no model decisions.
+
 ## Scripted verification
 
 ```powershell
@@ -142,6 +207,12 @@ recipe against both, and asserts:
 
 The last point matters: a timeout or missing element is an execution error,
 **not** proof that the reported product bug was reproduced.
+
+`tests/test_agent_service.py` adds scripted service checks: browser state
+surviving separate CLI processes, isolation between investigations, frozen
+expectation, budget and action-error handling, service cleanup, and replay of
+an exported sequence. Those tests are labelled scripted; no model chooses
+anything in them.
 
 ## How it works (beginner view)
 
@@ -173,9 +244,10 @@ recipes/*.json  +  --base-url
 - **Every run is isolated.** A new Chromium context means no cookies or cache
   leak between runs, and a new output directory means old evidence survives.
 
-## Agent-facing action interface (experimental)
+## Single-shot probing commands
 
-Two single-shot commands expose the same validated action layer:
+Two one-shot commands expose the same validated action layer without starting
+the service:
 
 ```powershell
 .\.venv\Scripts\bugrepro.exe observe --base-url http://127.0.0.1:8101
@@ -184,9 +256,8 @@ Two single-shot commands expose the same validated action layer:
 ```
 
 PowerShell 5.1 strips inline JSON quotes when calling native executables, so
-use `--action-file` here. Both commands print a JSON observation. Each call
-starts a fresh browser, so cookies do not persist between calls. Multi-step
-flows must use a recipe and `run`; a stateful agent session is Phase 2 work.
+use `--action-file` here. Each call starts a fresh browser, so cookies do not
+persist between calls; use the persistent service for multi-step sessions.
 
 ## Safety limits
 
@@ -203,25 +274,30 @@ flows must use a recipe and `run`; a stateful agent session is Phase 2 work.
 
 ```text
 src/bugrepro/
-  cli.py            commands: serve, run, replay, act, observe
-  safety.py         loopback-only URL and path validation
-  recipe.py         JSON schema, action/locator validation, fingerprints
-  browser.py        Playwright session, observations, screenshots
-  expectations.py   immutable expectation and fingerprint
-  check.py          fixed heading expectation -> passed/failed/error
-  runner.py         execution, run directories, run.json
-  report.py         Markdown report renderer
-  sample_app/       demo app with buggy and fixed modes
-recipes/            saved recipes
-tests/              validation, safety, run-directory and mechanics tests
-docs/PROGRESS.md    status, model-connection findings, next milestone
+  cli.py             commands: serve, run, replay, act, observe, agent ...
+  safety.py          loopback-only URL and path validation
+  recipe.py          JSON schema, action/locator validation, fingerprints
+  browser.py         Playwright host, session, observations, screenshots
+  expectations.py    immutable expectation and fingerprint
+  check.py           fixed heading expectation -> passed/failed/error
+  runner.py          scripted execution, run directories, run.json
+  report.py          Markdown report renderer
+  agent_client.py    service state file + JSON-over-HTTP client
+  service.py         persistent local service (worker thread, HTTP, auth)
+  investigation.py   one investigation: freeze, record, budget, finish, export
+  sample_app/        demo app with buggy and fixed modes
+recipes/             saved recipes
+examples/            live bug report, expectation and action file
+tests/               validation, safety, mechanics and service tests
+docs/PROGRESS.md     status, model-connection findings, live-run results
 ```
 
 ## Model connection
 
-Phase 1 did not implement a provider integration. The confirmed facts,
-proposed routes and blockers are recorded in `docs/PROGRESS.md`. In short: this
-session runs `deepseek/deepseek-v4.1-flash` through Alan's `alan_code`
-provider, and the agent can call the local CLI as a tool. A direct DeepSeek
-API route would need a separate DeepSeek API key; Alan credits are not an API
-key and no public Alan model endpoint is documented.
+No provider integration was added. The current Alan session (`alan_code`
+provider, session-reported model `deepseek/deepseek-v4.1-flash`) is the
+decision maker, and the local service is the executor: the agent calls the CLI
+as a tool, one action at a time, from its own observations. Alan credits are
+not an API key and no public Alan model endpoint is documented, so nothing
+here calls a model API. The confirmed facts, blockers and the live run are
+recorded in `docs/PROGRESS.md`.

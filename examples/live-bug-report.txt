@@ -1,0 +1,1 @@
+When I log in as Alice, log out, and then log in as Bob, the previous user's profile is still displayed.

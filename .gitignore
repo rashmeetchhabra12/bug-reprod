@@ -9,3 +9,4 @@ dist/
 runs/
 playwright-report/
 test-results/
+.bugrepro/
