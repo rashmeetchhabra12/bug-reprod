@@ -217,7 +217,7 @@ class Investigation:
             )
 
     # ------------------------------------------------------------- actions
-    def execute_action(self, action: Action) -> dict[str, Any]:
+    def execute_action(self, action: Action, rationale: str | None = None) -> dict[str, Any]:
         self._ensure_active("execute an action")
         self.touch()
 
@@ -231,6 +231,7 @@ class Investigation:
                 "index": None,
                 "status": "error",
                 "action": action.to_dict(),
+                "rationale": rationale,
                 "error": message,
                 "at": _iso(),
             }
@@ -281,6 +282,7 @@ class Investigation:
                     ),
                     error=message,
                     screenshot=screenshot,
+                    rationale=rationale,
                 )
             )
             if failure_observation is not None:
@@ -289,6 +291,7 @@ class Investigation:
                 "index": index,
                 "status": "failed",
                 "action": action.to_dict(),
+                "rationale": rationale,
                 "error": message,
                 "at": _iso(),
             }
@@ -326,6 +329,7 @@ class Investigation:
                     ),
                     error=message,
                     screenshot=screenshot,
+                    rationale=rationale,
                 )
             )
             if failure_observation is not None:
@@ -334,6 +338,7 @@ class Investigation:
                 "index": index,
                 "status": "failed",
                 "action": action.to_dict(),
+                "rationale": rationale,
                 "error": message,
                 "at": _iso(),
             }
@@ -358,6 +363,7 @@ class Investigation:
                 duration_ms=int((time.perf_counter() - started) * 1000),
                 observation=observation.to_dict(),
                 screenshot=screenshot,
+                rationale=rationale,
             )
         )
         self.last_observation = observation
@@ -365,6 +371,7 @@ class Investigation:
             "index": index,
             "status": "ok",
             "action": action.to_dict(),
+            "rationale": rationale,
             "error": None,
             "at": _iso(),
         }

@@ -1,8 +1,8 @@
 # Agent guide - Bug Repro
 
-This repository is a Phase 2 prototype. Read `docs/PROGRESS.md` before
-extending it. The deliberately scripted mechanics checks must stay green, and
-they must stay labelled as scripted.
+This repository is a Phase 3 prototype. Read `docs/PROGRESS.md` and
+`docs/ALAN_WORKFLOW.md` before extending it. The deliberately scripted
+mechanics checks must stay green, and they must stay labelled as scripted.
 
 ## Environment
 
@@ -18,13 +18,16 @@ they must stay labelled as scripted.
 .\.venv\Scripts\python.exe -m pytest
 .\.venv\Scripts\bugrepro.exe serve --mode buggy --port 8101
 .\.venv\Scripts\bugrepro.exe serve --mode fixed --port 8102
+.\.venv\Scripts\bugrepro.exe serve --app tasks --mode buggy --port 8103
+.\.venv\Scripts\bugrepro.exe serve --app tasks --mode fixed --port 8104
 .\.venv\Scripts\bugrepro.exe run recipes\sample-alice-bob.json --base-url http://127.0.0.1:8101
 .\.venv\Scripts\bugrepro.exe replay runs\<run-dir> --base-url http://127.0.0.1:8102
 .\.venv\Scripts\bugrepro.exe agent serve
 .\.venv\Scripts\bugrepro.exe agent start --target http://127.0.0.1:8101 --report-file examples\live-bug-report.txt --expectation-file examples\live-expectation.json
-.\.venv\Scripts\bugrepro.exe agent act --session <id> --action-file <action.json>
+.\.venv\Scripts\bugrepro.exe agent act --session <id> --action-file <action.json> --rationale-file <rationale.txt>
 .\.venv\Scripts\bugrepro.exe agent finish --session <id>
 .\.venv\Scripts\bugrepro.exe agent export --session <id>
+.\.venv\Scripts\bugrepro.exe report --attempt runs\<live> --buggy runs\<replay> --fixed runs\<replay> --output runs\evidence-report.html
 ```
 
 `pytest` uses `.pytest-tmp/` as its basetemp because the machine's shared
@@ -37,10 +40,10 @@ pytest temp directory is not readable.
    start and fingerprinted. The action interface must never accept an
    expectation. Never infer or weaken it from the page, the actions, a model
    response, or a previous run.
-2. **Recipes are data, not code.** Only `goto`, `click`, `fill`, `observe` and
-   `screenshot` are valid. Never add `eval`, `exec`, Python strings, raw
-   JavaScript, or CSS/XPath locator fields. Extend `recipe.py` with explicit
-   validation instead.
+2. **Recipes are data, not code.** Only `goto`, `click`, `fill`, `reload`,
+   `observe` and `screenshot` are valid. Never add `eval`, `exec`, Python
+   strings, raw JavaScript, or CSS/XPath locator fields. Extend `recipe.py`
+   with explicit validation instead.
 3. **Loopback only.** All targets pass through `safety.validate_base_url`.
    Do not add a bypass, redirect following to another origin, or non-loopback
    support without updating the threat model and tests.
@@ -73,19 +76,28 @@ pytest temp directory is not readable.
 - New action type: `recipe.py` validation + `browser.py` execution + a
   mechanics or integration test. Update `docs/PROGRESS.md`.
 - New expectation kind: `expectations.py` schema + `check.py` evaluation, with
-  explicit passed/failed/error semantics.
-- Report output: `report.py` only; `run.json` remains the source of truth.
-- Demo app: `sample_app/server.py`. Keep the buggy and fixed behaviour
-  independently startable on different ports.
+  explicit passed/failed/error semantics. Only `heading_text` and
+  `region_text_exact` exist; do not turn this into a general assertion language.
+- Report output: `report.py` (Markdown) and `html_report.py` (portable HTML);
+  `run.json` remains the source of truth. Escape every dynamic value in HTML
+  and embed only images inside the selected run directory.
+- Demo apps: `sample_app/server.py` (accounts) and `task_app/server.py`
+  (tasks). Keep buggy and fixed independently startable, with identical
+  accessible controls in both modes.
 - Service transport or lifecycle: `service.py` (worker thread, HTTP surface,
   timeouts). Do not put model calls there.
 - Investigation state machine: `investigation.py`. It must not call a model.
 - Agent CLI commands: `cli.py` + `agent_client.py`.
+- Workflow documentation: `docs/ALAN_WORKFLOW.md`; keep it in sync with the
+  actual CLI.
 
 ## Definition of done
 
 - `.\.venv\Scripts\python.exe -m pytest` passes.
-- The buggy/fixed CLI demo still produces exit codes 1 and 0 respectively.
+- Both buggy/fixed CLI demos (accounts and tasks) still produce exit codes 1
+  and 0 respectively.
 - Any new claim is marked implemented vs planned in `docs/PROGRESS.md`.
+- The HTML report is still self-contained: no scripts, no network requests,
+  only explicitly selected runs.
 - No dashboard, database, auth system, auto-patching or GitHub integration is
   added.

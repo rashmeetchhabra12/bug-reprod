@@ -144,8 +144,16 @@ class AgentClient:
     def observe(self, session_id: str) -> dict[str, Any]:
         return self._request("POST", f"/sessions/{session_id}/observe", {})
 
-    def act(self, session_id: str, action: dict[str, Any]) -> dict[str, Any]:
-        return self._request("POST", f"/sessions/{session_id}/action", action)
+    def act(
+        self,
+        session_id: str,
+        action: dict[str, Any],
+        rationale: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"action": action}
+        if rationale is not None:
+            payload["rationale"] = rationale
+        return self._request("POST", f"/sessions/{session_id}/action", payload)
 
     def finish(self, session_id: str) -> dict[str, Any]:
         return self._request("POST", f"/sessions/{session_id}/finish", {})

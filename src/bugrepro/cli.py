@@ -18,6 +18,12 @@ Phase 2 (persistent local service for the Alan agent):
     bugrepro agent close   --session <id>
     bugrepro agent stop
 
+Phase 3 (second fixture and portable evidence):
+
+    bugrepro serve --app tasks --mode buggy --port 8103
+    bugrepro report --attempt runs/<live> --buggy runs/<replay> \
+        --fixed runs/<replay> --output runs/evidence-report.html
+
 Exit codes for run/replay/finish: 0 = expectation passed, 1 = expectation
 failed, 2 = execution error / incomplete attempt. Agent control commands
 return 0 on a successful operation and 2 on a service or action error.
@@ -116,7 +122,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    serve_parser = sub.add_parser("serve", help="run the sample app")
+    serve_parser = sub.add_parser("serve", help="run a sample app")
+    serve_parser.add_argument(
+        "--app",
+        choices=("accounts", "tasks"),
+        default="accounts",
+        help="which fixture to serve (default: accounts)",
+    )
     serve_parser.add_argument("--mode", choices=("buggy", "fixed"), required=True)
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8101)
@@ -255,6 +267,11 @@ def build_parser() -> argparse.ArgumentParser:
     _add_state_file_argument(agent_act)
     agent_act.add_argument("--session", required=True)
     agent_act.add_argument("--action-file", required=True)
+    agent_act.add_argument(
+        "--rationale-file",
+        default=None,
+        help="optional text file with the agent's public reason for this action",
+    )
 
     agent_finish = agent_sub.add_parser(
         "finish", help="finish and evaluate the frozen expectation"
@@ -276,6 +293,23 @@ def build_parser() -> argparse.ArgumentParser:
     _add_state_file_argument(agent_close)
     agent_close.add_argument("--session", required=True)
 
+    report_parser = sub.add_parser(
+        "report",
+        help="render a self-contained HTML evidence report from selected runs",
+    )
+    report_parser.add_argument(
+        "--attempt", required=True, help="run directory of the original attempt"
+    )
+    report_parser.add_argument(
+        "--buggy", default=None, help="run directory of the buggy replay"
+    )
+    report_parser.add_argument(
+        "--fixed", default=None, help="run directory of the fixed replay"
+    )
+    report_parser.add_argument(
+        "--output", required=True, help="path of the HTML file to write"
+    )
+
     return parser
 
 
@@ -289,7 +323,7 @@ def _print_result(result) -> None:
           f"({result.expectation_fingerprint})")
     print(f"Check: {result.check.status.upper()} - {result.check.reason}")
     if result.check.observed:
-        print("Observed headings: " + " | ".join(result.check.observed))
+        print("Observed: " + " | ".join(result.check.observed))
     if result.action_failures:
         print(f"Action failures: {len(result.action_failures)}")
     if result.execution_errors:
@@ -416,7 +450,14 @@ def _cmd_agent_client(args) -> int:
             result = client.observe(args.session)
         elif command == "act":
             action = _read_json_object(args.action_file, "action file")
-            result = client.act(args.session, action)
+            rationale = None
+            if args.rationale_file:
+                rationale = Path(args.rationale_file).read_text(
+                    encoding="utf-8-sig"
+                ).strip()
+                if not rationale:
+                    rationale = None
+            result = client.act(args.session, action, rationale)
         elif command == "finish":
             result = client.finish(args.session)
         elif command == "export":
@@ -442,12 +483,59 @@ def _cmd_agent_client(args) -> int:
     return EXIT_PASSED
 
 
+def _cmd_report(args) -> int:
+    """Render a self-contained HTML report from explicitly selected runs."""
+    from .html_report import (
+        compare_fingerprints,
+        load_report_run,
+        write_report_html,
+    )
+
+    try:
+        runs = {"attempt": load_report_run(args.attempt, "attempt")}
+        if args.buggy:
+            runs["buggy"] = load_report_run(args.buggy, "buggy")
+        if args.fixed:
+            runs["fixed"] = load_report_run(args.fixed, "fixed")
+        unchanged, reasons = compare_fingerprints(runs.values())
+        output = write_report_html(args.output, runs)
+    except Exception as exc:  # noqa: BLE001 - the caller gets JSON
+        print(
+            json.dumps(
+                {"status": "error", "error": f"{type(exc).__name__}: {exc}"},
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return EXIT_ERROR
+
+    print(
+        json.dumps(
+            {
+                "status": "ok",
+                "output": str(output),
+                "runs": {role: str(run.run_dir) for role, run in runs.items()},
+                "unchanged_replay": unchanged,
+                "mismatch_reasons": reasons,
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+    )
+    return EXIT_PASSED
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     if args.command == "serve":
         try:
-            serve(mode=args.mode, host=args.host, port=args.port)
+            if args.app == "tasks":
+                from .task_app.server import serve as serve_tasks
+
+                serve_tasks(mode=args.mode, host=args.host, port=args.port)
+            else:
+                serve(mode=args.mode, host=args.host, port=args.port)
         except (ValueError, OSError) as exc:
             print(f"Could not start the sample app: {exc}", file=sys.stderr)
             return EXIT_ERROR
@@ -460,6 +548,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.agent_command == "serve":
             return _cmd_agent_serve(args)
         return _cmd_agent_client(args)
+
+    if args.command == "report":
+        return _cmd_report(args)
 
     invocation = "run" if args.command == "run" else "replay"
     try:

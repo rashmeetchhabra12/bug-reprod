@@ -96,8 +96,17 @@ def render_report(run: dict[str, Any]) -> str:
         "| Field | Value |",
         "| --- | --- |",
         f"| Kind | {_cell(run['expectation']['kind'])} |",
-        f"| Heading text | {_cell(run['expectation']['text'])} |",
-        f"| Heading level | {run['expectation']['level']} |",
+        f"| Expected text | {_cell(run['expectation']['text'])} |",
+        *(
+            [f"| Region | {_cell(run['expectation']['region'])} |"]
+            if run["expectation"].get("region") is not None
+            else []
+        ),
+        *(
+            [f"| Heading level | {run['expectation']['level']} |"]
+            if run["expectation"]["kind"] == "heading_text"
+            else []
+        ),
         f"| Fingerprint | {_cell(run['expectation']['fingerprint'], 80)} |",
     ]
 

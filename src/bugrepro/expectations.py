@@ -3,6 +3,18 @@
 An expectation is stored separately from the action sequence. It is only ever
 read by the checker and copied into run records; nothing in the replay path is
 allowed to derive, replace or weaken it.
+
+Two kinds are supported, deliberately small:
+
+``heading_text``
+    A level-``N`` heading whose normalized text equals ``text``.
+
+``region_text_exact``
+    An accessible region named ``region`` contains a list item whose
+    normalized text equals ``text`` exactly.
+
+The ``level`` field is only meaningful for ``heading_text``. It stays in the
+canonical form so that Phase 1/2 expectation fingerprints remain stable.
 """
 
 from __future__ import annotations
@@ -13,8 +25,11 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-SUPPORTED_KINDS = frozenset({"heading_text"})
+HEADING_KIND = "heading_text"
+REGION_KIND = "region_text_exact"
+SUPPORTED_KINDS = frozenset({HEADING_KIND, REGION_KIND})
 _MAX_TEXT_LENGTH = 200
+_MAX_REGION_LENGTH = 80
 
 
 class ExpectationError(ValueError):
@@ -26,9 +41,17 @@ class Expectation:
     kind: str
     text: str
     level: int = 1
+    region: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {"kind": self.kind, "text": self.text, "level": self.level}
+        data: dict[str, Any] = {
+            "kind": self.kind,
+            "text": self.text,
+            "level": self.level,
+        }
+        if self.region is not None:
+            data["region"] = self.region
+        return data
 
     def fingerprint(self) -> str:
         """Stable digest of the expectation, included in every run record."""
@@ -41,7 +64,7 @@ class Expectation:
 def parse_expectation(raw: Any) -> Expectation:
     if not isinstance(raw, dict):
         raise ExpectationError("expectation must be a JSON object.")
-    unknown = set(raw) - {"kind", "text", "level"}
+    unknown = set(raw) - {"kind", "text", "level", "region"}
     if unknown:
         raise ExpectationError(f"unknown expectation field(s): {sorted(unknown)}")
 
@@ -65,7 +88,23 @@ def parse_expectation(raw: Any) -> Expectation:
     if isinstance(level, bool) or not isinstance(level, int) or not (1 <= level <= 6):
         raise ExpectationError("expectation.level must be an integer from 1 to 6.")
 
-    return Expectation(kind=kind, text=text, level=level)
+    region = raw.get("region")
+    if kind == REGION_KIND:
+        if not isinstance(region, str) or not region.strip():
+            raise ExpectationError(
+                "expectation.region is required for region_text_exact."
+            )
+        if len(region) > _MAX_REGION_LENGTH:
+            raise ExpectationError("expectation.region is too long.")
+        if re.search(r"[\x00\r\n\t]", region):
+            raise ExpectationError("expectation.region must be a single line.")
+        region = region.strip()
+    elif region is not None:
+        raise ExpectationError(
+            "expectation.region is only valid for region_text_exact."
+        )
+
+    return Expectation(kind=kind, text=text, level=level, region=region)
 
 
 def normalize_heading(text: str) -> str:

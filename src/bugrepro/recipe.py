@@ -37,7 +37,9 @@ ROLE_NAMES = frozenset(
     }
 )
 FILLABLE_ROLES = frozenset({"textbox", "searchbox", "combobox"})
-ACTION_TYPES = frozenset({"goto", "click", "fill", "observe", "screenshot"})
+ACTION_TYPES = frozenset(
+    {"goto", "click", "fill", "reload", "observe", "screenshot"}
+)
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,79}$")
 _LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$")
@@ -68,6 +70,8 @@ class Action:
     def to_dict(self) -> dict[str, Any]:
         if self.type == "goto":
             return {"type": "goto", "path": self.path}
+        if self.type == "reload":
+            return {"type": "reload"}
         if self.type == "click":
             assert self.locator is not None
             return {"type": "click", "locator": self.locator.to_dict()}
@@ -152,6 +156,11 @@ def _parse_action(raw: Any, index: int) -> Action:
         except TargetError as exc:
             raise RecipeError(f"{where}.path: {exc}") from exc
         return Action(type="goto", path=path)
+
+    if action_type == "reload":
+        # Reload the current same-origin page; it takes no arguments.
+        _reject_unknown(raw, {"type"}, where)
+        return Action(type="reload")
 
     if action_type == "click":
         _reject_unknown(raw, {"type", "locator"}, where)

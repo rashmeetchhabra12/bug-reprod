@@ -3,25 +3,30 @@
 A small, honest prototype for turning a written web-app bug report into a
 **replayable browser test with evidence**.
 
-You give it a local app URL, a scenario (login as Alice, log out, login as
-Bob), and a fixed human expectation (`Profile for Bob`). It drives Chromium
-with Playwright, records every action, checks the expectation, and writes a
-report plus screenshots into a unique run directory. After a manual fix, the
-same recipe can be replayed against another local URL.
+You give it a local app URL, a written bug report, and a fixed human
+expectation. It drives Chromium with Playwright, records every action, checks
+the expectation, and writes a report plus screenshots into a unique run
+directory. After a manual fix, the same recipe can be replayed against another
+local URL.
 
-> **Phase 2 status: the Alan agent can drive a persistent browser session
-> through local commands.** The scripted Phase 1 path still works, and the
-> deliberate demo bug is still a fixed fixture. There is no automatic bug
-> discovery, no automatic fix and no direct model API integration.
+> **Phase 3 status: two fixtures, a persistent agent workflow, and a portable
+> HTML evidence report.** The Alan session can still drive a browser one action
+> at a time through local commands. There is no automatic bug discovery, no
+> automatic fix and no direct model API integration.
 
 ## What is implemented
 
 - Installable Python package with a `bugrepro` CLI.
-- Demo app in two independent modes (`buggy` and `fixed`) on separate ports.
-- Browser executor: observe, click, fill, screenshot, accessibility snapshots.
+- Two independent demo fixtures, each with `buggy` and `fixed` modes on
+  separate ports:
+  - account switching (cached profile after logout),
+  - task list (a task disappears after reload).
+- Browser executor: observe, click, fill, reload, screenshot, accessibility
+  snapshots.
 - Semantic, ARIA-role locators only; no model-generated Python or JavaScript.
 - Strict JSON recipe validation and loopback-only target validation.
-- Fixed expectation stored separately from the action sequence.
+- Fixed expectations stored separately from the action sequence: heading text,
+  or an exact task title inside an accessible region.
 - Structured run records, Markdown reports, screenshots, and non-overwriting
   run directories.
 - Replay of a saved recipe against a different local URL with no model calls.
@@ -29,9 +34,14 @@ same recipe can be replayed against another local URL.
   separate CLI invocations, with token auth, an action budget, idle timeouts
   and crash handling.
 - An agent-facing CLI (`agent start/observe/act/finish/export/status/close/
-  stop`) returning machine-readable JSON.
+  stop`) returning machine-readable JSON, with optional recorded rationales.
+- A self-contained HTML report with embedded screenshots, a three-way
+  comparison and fingerprint-mismatch warnings.
 - Explicit scripted mechanics checks: buggy build fails, fixed build passes,
   execution errors stay distinct from expectation failures.
+
+The full operator workflow, including a reusable investigation prompt, is in
+[`docs/ALAN_WORKFLOW.md`](docs/ALAN_WORKFLOW.md).
 
 ## What is deliberately not implemented
 
@@ -41,6 +51,7 @@ same recipe can be replayed against another local URL.
 - A dashboard, database service, multi-agent system or GitHub integration.
 - Non-loopback targets.
 - Arbitrary code, shell or filesystem endpoints on the service.
+- A general assertion language; only two explicit expectation kinds exist.
 
 ## Setup (Windows 11, PowerShell 5.1)
 
@@ -87,6 +98,21 @@ The header says `Signed in as: Bob`, but the heading says
 
 The demo has two accounts, `alice` and `bob`, with no passwords and no real
 credentials.
+
+### Task-list fixture
+
+The second fixture is independent of the account demo:
+
+```powershell
+.\.venv\Scripts\bugrepro.exe serve --app tasks --mode buggy --port 8103
+.\.venv\Scripts\bugrepro.exe serve --app tasks --mode fixed --port 8104
+```
+
+Both builds expose the same labelled **Task title** input, **Add task** button,
+and accessible region named **Tasks**. Adding `Prepare hackathon demo` shows it
+in the list. On the buggy build it is gone after a reload; on the fixed build
+it persists. Task storage is a browser cookie, so a fresh browser context per
+investigation or replay starts empty.
 
 ## Run and replay
 
@@ -191,6 +217,29 @@ Guarantees:
 - `export` writes `recipe.json` inside the run directory. `replay` then runs
   it against any loopback URL with no model decisions.
 
+## HTML evidence report (Phase 3)
+
+Turn the selected runs into one portable file with embedded screenshots:
+
+```powershell
+.\.venv\Scripts\bugrepro.exe report `
+  --attempt runs\<live-run-dir> `
+  --buggy runs\<buggy-replay-dir> `
+  --fixed runs\<fixed-replay-dir> `
+  --output runs\evidence-report.html
+```
+
+Open the HTML file directly in a browser. It is self-contained: no scripts, no
+network requests, no service needed. It shows the bug report, the frozen
+expectation and its fingerprint, the outcome, driver and session-reported
+model identity, ordered actions with recorded rationales, before/after
+screenshots, errors, budget, and a three-way comparison.
+
+The comparison explicitly warns when it is **not** an unchanged replay:
+different recipe fingerprints, different expectation fingerprints, missing
+fingerprints, or a replay not labelled `recorded-replay`. Only the runs passed
+on the command line are included.
+
 ## Scripted verification
 
 ```powershell
@@ -214,6 +263,12 @@ expectation, budget and action-error handling, service cleanup, and replay of
 an exported sequence. Those tests are labelled scripted; no model chooses
 anything in them.
 
+`tests/test_task_app.py` covers the second fixture: `reload` validation,
+`region_text_exact` validation, the identical recipe failing on buggy mode and
+passing on fixed mode, and fresh-context task isolation.
+`tests/test_html_report.py` covers HTML escaping, embedded images, selected-run
+filtering and fingerprint-mismatch warnings.
+
 ## How it works (beginner view)
 
 ```text
@@ -233,11 +288,13 @@ recipes/*.json  +  --base-url
 ```
 
 - **The recipe is data, not code.** Supported actions are `goto`, `click`,
-  `fill`, `observe` and `screenshot`. Locators use an ARIA role plus an
-  accessible name, e.g. `button "Log in"`.
+  `fill`, `reload`, `observe` and `screenshot`. Locators use an ARIA role plus
+  an accessible name, e.g. `button "Log in"`. `reload` re-fetches the current
+  page with GET.
 - **The expectation is separate.** It lives in its own recipe field, is shown
   verbatim in every report, and is fingerprinted. Nothing in replay rewrites
-  or weakens it.
+  or weakens it. Two kinds exist: `heading_text` and `region_text_exact`
+  (an exact list item inside an accessible region).
 - **Errors are separated.** `action_failures` are locator/action problems;
   `execution_errors` are browser/session problems. Either one makes the check
   `error`, not `failed`.
@@ -274,22 +331,25 @@ persist between calls; use the persistent service for multi-step sessions.
 
 ```text
 src/bugrepro/
-  cli.py             commands: serve, run, replay, act, observe, agent ...
+  cli.py             commands: serve, run, replay, act, observe, agent ..., report
   safety.py          loopback-only URL and path validation
   recipe.py          JSON schema, action/locator validation, fingerprints
   browser.py         Playwright host, session, observations, screenshots
-  expectations.py    immutable expectation and fingerprint
-  check.py           fixed heading expectation -> passed/failed/error
+  expectations.py    immutable heading / region expectations, fingerprint
+  check.py           expectation evaluation -> passed/failed/error
   runner.py          scripted execution, run directories, run.json
   report.py          Markdown report renderer
+  html_report.py     self-contained HTML evidence report + comparison
   agent_client.py    service state file + JSON-over-HTTP client
   service.py         persistent local service (worker thread, HTTP, auth)
   investigation.py   one investigation: freeze, record, budget, finish, export
-  sample_app/        demo app with buggy and fixed modes
+  sample_app/        account-switching fixture
+  task_app/          task-list fixture (reload persistence)
 recipes/             saved recipes
-examples/            live bug report, expectation and action file
-tests/               validation, safety, mechanics and service tests
+examples/            live reports, expectations and action files
+tests/               validation, safety, mechanics, service and report tests
 docs/PROGRESS.md     status, model-connection findings, live-run results
+docs/ALAN_WORKFLOW.md operator workflow and reusable investigation prompt
 ```
 
 ## Model connection

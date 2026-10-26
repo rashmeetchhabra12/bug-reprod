@@ -242,6 +242,9 @@ class BrowserSession:
         elif action.type == "fill":
             assert action.locator is not None and action.text is not None
             self._locator(action.locator).fill(action.text)
+        elif action.type == "reload":
+            # Same-origin reload only: the page keeps whatever origin it has.
+            page.reload(wait_until="domcontentloaded")
         elif action.type in {"observe", "screenshot"}:
             pass
         else:

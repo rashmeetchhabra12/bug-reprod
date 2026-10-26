@@ -46,6 +46,7 @@ SERVICE_NAME = "bugrepro-agent"
 SERVICE_PROTOCOL = 1
 MAX_BODY_BYTES = 256 * 1024
 MAX_BUG_REPORT_CHARS = 20_000
+MAX_RATIONALE_CHARS = 600
 SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 ALLOWED_START_FIELDS = frozenset(
     {
@@ -74,6 +75,24 @@ class AgentServiceError(RuntimeError):
         super().__init__(message)
         self.http_status = http_status
         self.code = code
+
+
+def _validate_rationale(value: Any) -> str | None:
+    """Validate an optional public rationale recorded with one action."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise InvestigationError("rationale must be a string when provided.")
+    text = value.strip()
+    if not text:
+        return None
+    if len(text) > MAX_RATIONALE_CHARS:
+        raise InvestigationError(
+            f"rationale must be at most {MAX_RATIONALE_CHARS} characters."
+        )
+    if "\x00" in text:
+        raise InvestigationError("rationale must not contain a NUL character.")
+    return text
 
 
 @dataclass
@@ -346,14 +365,35 @@ class AgentService:
         self.touch()
         return self._get(session_id).observe()
 
-    def act(self, session_id: str, action_payload: Any) -> dict[str, Any]:
+    def act(self, session_id: str, body: Any) -> dict[str, Any]:
+        """Execute one action.
+
+        Accepts either a bare action object (backwards compatible) or
+        ``{"action": {...}, "rationale": "..."}``. A rationale is optional
+        recorded evidence; it never influences validation or the check.
+        """
         self.touch()
         investigation = self._get(session_id)
+        if not isinstance(body, dict):
+            raise InvestigationError("The action request must be a JSON object.")
+
+        if "action" in body:
+            unknown = set(body) - {"action", "rationale"}
+            if unknown:
+                raise InvestigationError(
+                    f"Unknown field(s) in the action request: {sorted(unknown)}."
+                )
+            action_payload = body["action"]
+            rationale = _validate_rationale(body.get("rationale"))
+        else:
+            action_payload = body
+            rationale = None
+
         try:
             action = parse_action(action_payload)
         except RecipeError as exc:
             raise InvestigationError(str(exc)) from exc
-        return investigation.execute_action(action)
+        return investigation.execute_action(action, rationale)
 
     def finish(self, session_id: str) -> dict[str, Any]:
         self.touch()

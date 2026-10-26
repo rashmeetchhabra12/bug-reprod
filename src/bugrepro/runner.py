@@ -37,6 +37,7 @@ class ActionRecord:
     observation: dict[str, Any] | None = None
     error: str | None = None
     screenshot: str | None = None
+    rationale: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -48,6 +49,7 @@ class ActionRecord:
             "observation": self.observation,
             "error": self.error,
             "screenshot": self.screenshot,
+            "rationale": self.rationale,
         }
 
 

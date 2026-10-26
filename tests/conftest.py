@@ -1,4 +1,4 @@
-"""Shared fixtures: launch the real sample app as a subprocess on free ports."""
+"""Shared fixtures: launch the real sample apps as subprocesses on free ports."""
 
 from __future__ import annotations
 
@@ -14,6 +14,12 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RECIPE_PATH = PROJECT_ROOT / "recipes" / "sample-alice-bob.json"
+TASK_TITLE = "Prepare hackathon demo"
+TASK_EXPECTATION = {
+    "kind": "region_text_exact",
+    "text": TASK_TITLE,
+    "region": "Tasks",
+}
 
 
 def free_port() -> int:
@@ -40,8 +46,7 @@ def _wait_for_health(base_url: str, process: subprocess.Popen[str]) -> None:
     raise RuntimeError(f"sample app did not become healthy at {health_url}")
 
 
-@pytest.fixture(scope="session")
-def sample_apps() -> dict[str, str]:
+def _start_pair(app: str) -> tuple[dict[str, str], list[subprocess.Popen[str]]]:
     processes: list[subprocess.Popen[str]] = []
     started: dict[str, str] = {}
 
@@ -53,6 +58,8 @@ def sample_apps() -> dict[str, str]:
                 "-m",
                 "bugrepro",
                 "serve",
+                "--app",
+                app,
                 "--mode",
                 mode,
                 "--port",
@@ -68,15 +75,36 @@ def sample_apps() -> dict[str, str]:
         _wait_for_health(base_url, process)
         return base_url
 
+    started["buggy"] = start("buggy")
+    started["fixed"] = start("fixed")
+    return started, processes
+
+
+def _stop_all(processes: list[subprocess.Popen[str]]) -> None:
+    for process in processes:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+
+
+@pytest.fixture(scope="session")
+def sample_apps() -> dict[str, str]:
+    """Account-switching fixture (Phase 1)."""
+    started, processes = _start_pair("accounts")
     try:
-        started["buggy"] = start("buggy")
-        started["fixed"] = start("fixed")
         yield started
     finally:
-        for process in processes:
-            process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=5)
+        _stop_all(processes)
+
+
+@pytest.fixture(scope="session")
+def task_apps() -> dict[str, str]:
+    """Task-list fixture (Phase 3)."""
+    started, processes = _start_pair("tasks")
+    try:
+        yield started
+    finally:
+        _stop_all(processes)
