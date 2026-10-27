@@ -14,7 +14,7 @@ Two kinds are supported, deliberately small:
     normalized text equals ``text`` exactly.
 
 The ``level`` field is only meaningful for ``heading_text``. It stays in the
-canonical form so that Phase 1/2 expectation fingerprints remain stable.
+canonical form so that existing expectation fingerprints remain stable.
 """
 
 from __future__ import annotations

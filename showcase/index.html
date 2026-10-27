@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Bug Repro — recorded demonstration evidence</title>
+  <title>Bug Repro - recorded demonstration evidence</title>
   <style>
     :root {
       --ink:#172026; --muted:#5b6b76; --line:#d9e1e6; --bg:#f4f6f8;
@@ -61,15 +61,15 @@
   <div class="wrap">
     <p class="tag">Recorded demonstration evidence</p>
     <h1>Bug Repro</h1>
-    <p class="lead">A local browser-evidence harness for requirement-guided
-      exploration and reported-bug reproduction. The Alan model chose the live
-      actions through local tools; deterministic replays used the exact same
-      recipes. This page is a static showcase, not a live service.</p>
+    <p class="lead">A local browser-evidence tool for requirement-guided
+      exploration and reported-bug reproduction. An external agent chose the
+      live actions through local tools; deterministic replays used the exact
+      same recipes. This page contains recorded reports, not a live service.</p>
 
     <section class="card">
       <h2>What this is</h2>
-      <p>Bug Repro asks the Alan model to investigate a local web app through a
-        small local service. Every action is schema-validated, recorded with an
+      <p>Bug Repro validates actions submitted by an external agent through a
+        local service. Every action is schema-validated, recorded with an
         observation and screenshot, and checked against an expectation that was
         frozen before the action sequence.</p>
       <p>The included runs use a synthetic task-list fixture. On the buggy build,
@@ -81,24 +81,24 @@
     <section class="card">
       <h2>Selected evidence reports</h2>
       <div class="grid">
-        <a class="report" href="evidence/phase4-compare-r1.html">
+        <a class="report" href="evidence/task-compare-r1.html">
           <h3>R1 before/after comparison</h3>
           <span>Original alan-agent attempt on buggy, buggy replay confirmation,
             and identical-recipe replay on fixed.</span>
           <span class="go">Open report →</span>
         </a>
-        <a class="report" href="evidence/phase4-compare-r2.html">
+        <a class="report" href="evidence/task-compare-r2.html">
           <h3>R2 before/after comparison</h3>
           <span>Second task preserved? Same three-way evidence for R2.</span>
           <span class="go">Open report →</span>
         </a>
-        <a class="report" href="evidence/phase4-task-buggy-exploration.html">
+        <a class="report" href="evidence/task-buggy-exploration.html">
           <h3>Buggy exploration</h3>
           <span>Requirements, scenarios, classifications, replay confirmation
             and full action evidence.</span>
           <span class="go">Open report →</span>
         </a>
-        <a class="report" href="evidence/phase4-task-fixed-exploration.html">
+        <a class="report" href="evidence/task-fixed-exploration.html">
           <h3>Fixed exploration</h3>
           <span>The same two requirements tested against the fixed build: two
             no-violation results.</span>
@@ -142,7 +142,7 @@
 .\.venv\Scripts\python.exe -m playwright install chromium
 
 .\scripts\demo.ps1 start
-# follow docs\DEMO.md for a full investigation
+# see docs\USAGE.md and docs\EXAMPLES.md for a full investigation
 .\scripts\demo.ps1 stop</pre>
       <p class="small" style="margin-top:12px">The script starts the buggy task app
         on <code>127.0.0.1:8103</code>, the fixed app on
@@ -150,32 +150,29 @@
         either port is occupied and never kills an unrelated process. The service
         is loopback-only; its token is stored outside the repository and is not
         printed.</p>
-      <p class="small">Full workflow: <code>docs\DEMO.md</code> and
-        <code>docs\ALAN_WORKFLOW.md</code>.</p>
+      <p class="small">Full workflow: <code>docs\USAGE.md</code>,
+        <code>docs\EXAMPLES.md</code> and <code>docs\ALAN_INTEGRATION.md</code>.</p>
     </section>
 
     <section class="card">
-      <h2>Honest scope</h2>
+      <h2>Scope</h2>
       <ul>
-        <li>Known-app, requirement-guided demonstrations. This is not blind bug
-          discovery.</li>
         <li>Live decisions are labelled <code>alan-agent</code>. Recorded replays
           are labelled <code>recorded-replay</code> and make no model calls.</li>
         <li>The reports are static recorded evidence. They do not launch the
-          agent, contact the service or provide live cloud testing.</li>
-        <li>A failed expectation is an observation about the executed sequence,
-          not proof of a root cause.</li>
-        <li>Local loopback targets, Chromium, two expectation kinds and a bounded
-          exploration budget.</li>
+          agent or contact the service.</li>
+        <li>Reports record observed behavior, not a root cause.</li>
+        <li>Local loopback targets, Chromium, supported actions and checks, and
+          no automatic code repair.</li>
         <li>No credentials, personal paths or service state are included in this
           showcase.</li>
       </ul>
     </section>
 
     <footer>
-      Recorded 2026-10-26/27 from synthetic fixtures. Source runs remain private
+      Recorded from synthetic fixtures on 2026-10-26/27. Source runs remain local
       in <code>runs\</code> and are excluded from Git; only these selected,
-      self-contained reports are shared.
+      self-contained reports are included.
     </footer>
   </div>
 </body>

@@ -1,4 +1,4 @@
-"""Task-list fixture (Phase 3).
+"""Task-list fixture.
 
 Deliberately separate from the account-switching fixture. Both modes render
 the same accessible controls and layout:

@@ -3,7 +3,7 @@
 An investigation owns exactly one :class:`BrowserSession` (a fresh context)
 for its whole life. It records every action and observation, freezes the
 human expectation at start, enforces the action budget, and finalizes into the
-same run/report format used by Phase 1.
+same run/report format used by scripted runs.
 
 All methods are called on the service worker thread. This module never calls
 a model, reads files from arbitrary paths, or executes code from inputs.

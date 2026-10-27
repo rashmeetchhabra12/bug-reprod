@@ -1,16 +1,14 @@
 # Agent guide - Bug Repro
 
-This repository is a prototype. Read `README.md` and
-`docs/ALAN_WORKFLOW.md` before extending it. The deliberately scripted
-mechanics checks must stay green, and they must stay labelled as scripted.
+Bug Repro is a local browser-evidence tool. Read `README.md`,
+`docs/USAGE.md`, and `docs/ALAN_INTEGRATION.md` before extending it. The
+scripted mechanics checks must stay green and remain labelled as scripted.
 
 ## Environment
 
-- Windows 11, PowerShell 5.1 (do not assume bash).
-- Python 3.13.14 in `.venv` (project supports 3.11+).
-- Run commands from the repository root with `.\.venv\Scripts\python.exe`.
-- Chromium for Playwright is installed in
-  `%LOCALAPPDATA%\ms-playwright`.
+- Python 3.11+ and Playwright Chromium.
+- Examples use Windows PowerShell 5.1 or later.
+- Run commands from the repository root using the project virtual environment.
 
 ## Commands
 
@@ -37,8 +35,7 @@ mechanics checks must stay green, and they must stay labelled as scripted.
 .\.venv\Scripts\bugrepro.exe report --exploration runs\<exploration-dir> --output runs\exploration-report.html
 ```
 
-`pytest` uses `.pytest-tmp/` as its basetemp because the machine's shared
-pytest temp directory is not readable.
+`pytest` uses `.pytest-tmp/` as its configured temporary directory.
 
 ## Invariants - do not break these
 
@@ -79,7 +76,7 @@ pytest temp directory is not readable.
     per-user state file outside the repository. Never print it, accept it as a
     command argument, or write it into a run directory. Never read or copy Alan
     credentials, `local-api.json`, provider auth files, or API keys.
-11. **Driver labels must stay honest.** `alan-agent` only when a model chose
+11. **Driver labels must be accurate.** `alan-agent` only when a model chose
     the actions; `scripted-test` for pre-written sequences;
     `recorded-replay` for replays. Never describe a scripted run as AI.
 12. **Exploration requirements are user-owned and frozen.** Requirements and
@@ -98,8 +95,8 @@ pytest temp directory is not readable.
 ## Where to change things
 
 - New action type: `recipe.py` validation + `browser.py` execution + a
-  mechanics or integration test. Update `README.md` and
-  `docs/ALAN_WORKFLOW.md`.
+  mechanics or integration test. Update `README.md`, `docs/USAGE.md`,
+  and `docs/EXAMPLES.md`.
 - New expectation kind: `expectations.py` schema + `check.py` evaluation, with
   explicit passed/failed/error semantics. Only `heading_text` and
   `region_text_exact` exist; do not turn this into a general assertion language.
@@ -118,15 +115,15 @@ pytest temp directory is not readable.
   timeouts). Do not put model calls there.
 - Investigation state machine: `investigation.py`. It must not call a model.
 - Agent CLI commands: `cli.py` + `agent_client.py`.
-- Workflow documentation: `docs/ALAN_WORKFLOW.md`; keep it in sync with the
-  actual CLI.
+- Documentation: `docs/USAGE.md`, `docs/EXAMPLES.md`, and
+  `docs/ALAN_INTEGRATION.md`. Keep command examples in sync with the CLI.
 
 ## Definition of done
 
 - `.\.venv\Scripts\python.exe -m pytest` passes.
 - Both buggy/fixed CLI demos (accounts and tasks) still produce exit codes 1
   and 0 respectively.
-- Any new claim is reflected in `README.md` and `docs/ALAN_WORKFLOW.md`.
+- Any new behavior is reflected in `README.md` and the relevant docs.
 - The HTML report is still self-contained: no scripts, no network requests,
   only explicitly selected runs or the selected exploration.
 - No dashboard, database, auth system, auto-patching or GitHub integration is

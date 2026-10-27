@@ -1,4 +1,4 @@
-"""Target validation for the Phase 1 browser.
+"""Target validation for the local browser.
 
 Only loopback HTTP(S) origins are accepted. This keeps the prototype from
 being pointed at arbitrary internet hosts while the action schema is still
@@ -48,7 +48,7 @@ def validate_base_url(raw: str) -> str:
         raise TargetError("Base URL must include a hostname.")
     if host.lower() not in LOOPBACK_HOSTS:
         raise TargetError(
-            "Phase 1 only allows loopback targets (127.0.0.1, localhost, ::1)."
+            "Only loopback targets (127.0.0.1, localhost, ::1) are allowed."
         )
     try:
         port = parts.port

@@ -1,12 +1,12 @@
 """Command line entry points.
 
-Phase 1 (scripted):
+Scripted recipes:
 
     bugrepro serve  --mode buggy|fixed --port 8101
     bugrepro run    recipes/sample-alice-bob.json --base-url http://127.0.0.1:8101
     bugrepro replay runs/<run-dir> --base-url http://127.0.0.1:8102
 
-Phase 2 (persistent local service for the Alan agent):
+Persistent local service for an external agent:
 
     bugrepro agent serve
     bugrepro agent start  --target ... --report-file ... --expectation-file ...
@@ -18,13 +18,13 @@ Phase 2 (persistent local service for the Alan agent):
     bugrepro agent close   --session <id>
     bugrepro agent stop
 
-Phase 3 (second fixture and portable evidence):
+Portable evidence reports:
 
     bugrepro serve --app tasks --mode buggy --port 8103
     bugrepro report --attempt runs/<live> --buggy runs/<replay> \
         --fixed runs/<replay> --output runs/evidence-report.html
 
-Phase 4 (bounded, requirement-guided exploration):
+Requirement-guided exploration:
 
     bugrepro explore start --spec-file examples/task-exploration.json
     bugrepro explore scenario start --exploration <id> --scenario-file <json>
@@ -255,7 +255,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--driver",
         choices=("alan-agent", "scripted-test"),
         default="scripted-test",
-        help="honest label for who chose the actions (default: scripted-test)",
+        help="label for who chose the actions (default: scripted-test)",
     )
     agent_start.add_argument(
         "--model", default="unknown", help="session-reported model identifier"

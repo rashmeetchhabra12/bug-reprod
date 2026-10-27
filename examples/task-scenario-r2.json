@@ -4,11 +4,11 @@
   "description": "Add both allowed task titles in one session and check that the Tasks region still contains the first title.",
   "expectation": {
     "kind": "region_text_exact",
-    "text": "Prepare hackathon demo",
+    "text": "Prepare demo task",
     "region": "Tasks"
   },
   "test_data": [
-    "Prepare hackathon demo",
-    "Review submission"
+    "Prepare demo task",
+    "Review notes"
   ]
 }

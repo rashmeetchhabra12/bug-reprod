@@ -212,7 +212,7 @@ try {
     Write-Host "Service state:    $ServiceState"
     Write-Host "Runs/evidence:    $(Join-Path $RepoRoot 'runs')"
     Write-Host ""
-    Write-Host "Next: open docs\DEMO.md, or run:"
+    Write-Host "Next: open docs\USAGE.md or docs\EXAMPLES.md, or run:"
     Write-Host "  .\.venv\Scripts\bugrepro.exe explore start --spec-file examples\task-exploration.json --driver alan-agent --label live-task-buggy"
     Write-Host "Stop:"
     Write-Host "  .\scripts\demo.ps1 stop"

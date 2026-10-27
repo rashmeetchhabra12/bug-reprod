@@ -1,8 +1,7 @@
-"""Bug Repro - a small browser-based bug reproduction and replay prototype.
+"""Bug Repro - local browser evidence, recording, checking and replay.
 
-Phase 1 is deliberately scripted: no model calls happen in this package yet.
-The browser executor and recipe format are designed to be driven by an agent
-in a later phase.
+The package never calls a language model. External agents submit validated
+actions through the local service; this code executes and records them.
 """
 
 __version__ = "0.1.0"

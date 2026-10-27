@@ -20,8 +20,8 @@
     "screenshot"
   ],
   "allowed_test_data": [
-    "Prepare hackathon demo",
-    "Review submission"
+    "Prepare demo task",
+    "Review notes"
   ],
   "excluded_interactions": [
     "Deleting tasks",
