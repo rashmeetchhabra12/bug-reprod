@@ -10,3 +10,5 @@ runs/
 playwright-report/
 test-results/
 .bugrepro/
+docs/DEMO_SCRIPT.md
+docs/PROGRESS.md

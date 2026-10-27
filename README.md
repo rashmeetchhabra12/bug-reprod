@@ -314,7 +314,7 @@ different recipe fingerprints, different expectation fingerprints, missing
 fingerprints, or a replay not labelled `recorded-replay`. Only the runs passed
 on the command line are included.
 
-## Requirement-guided exploration (Phase 4)
+## Requirement-guided exploration
 
 Instead of a bug report, supply expected behaviours and allowed test data.
 `examples/task-exploration.json` has two requirements (`R1`, `R2`) and two
@@ -489,10 +489,8 @@ examples/            reports, expectations, action files and exploration specs
 scripts/             demo.ps1 start/stop convenience script
 showcase/            shareable static evidence showcase (selected reports)
 tests/               validation, safety, mechanics, service, report, exploration
-docs/PROGRESS.md     status, model-connection findings, live-run results
 docs/ALAN_WORKFLOW.md operator workflow and reusable prompts
 docs/DEMO.md         one recommended end-to-end demonstration path
-docs/DEMO_SCRIPT.md  two-minute video walkthrough script
 LICENSE              MIT
 ```
 
@@ -503,8 +501,8 @@ provider, session-reported model `deepseek/deepseek-v4.1-flash`) is the
 decision maker, and the local service is the executor: the agent calls the CLI
 as a tool, one action at a time, from its own observations. Alan credits are
 not an API key and no public Alan model endpoint is documented, so nothing
-here calls a model API. The confirmed facts, blockers and the live run are
-recorded in `docs/PROGRESS.md`.
+here calls a model API. The confirmed facts and current limits are documented
+in `docs/ALAN_WORKFLOW.md`.
 
 ## Recorded showcase
 

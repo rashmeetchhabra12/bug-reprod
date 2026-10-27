@@ -193,7 +193,7 @@ shows the before/after result.
 ## If you only want to review recorded evidence
 
 Open `showcase\index.html`. It links to selected self-contained reports from the
-recorded Phase 4 runs. It is static evidence; it does not start the agent or
+recorded demonstration runs. It is static evidence; it does not start the agent or
 contact the service.
 
 ## Honest framing

@@ -256,7 +256,7 @@ It assumes the service and both builds are already running.
 > Do not label scripted actions as AI decisions. This is a known-fixture,
 > model-driven attempt, not a blind evaluation.
 
-## 9. Requirement-guided exploration (Phase 4)
+## 9. Requirement-guided exploration
 
 Reproduction starts from a known bug and its steps. Exploration starts from
 expected behaviours: the user supplies requirements and allowed test data, and
@@ -335,7 +335,7 @@ with that `session_id`:
 ```
 
 `examples/task-scenario-r1.json` and `examples/task-scenario-r2.json` are the
-scenarios used in the Phase 4 demonstration.
+scenarios used in the demonstration.
 
 ```powershell
 .\.venv\Scripts\bugrepro.exe explore scenario finish --exploration <id> --scenario S1

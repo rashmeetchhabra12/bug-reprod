@@ -1,6 +1,6 @@
 # Agent guide - Bug Repro
 
-This repository is a Phase 4 prototype. Read `docs/PROGRESS.md` and
+This repository is a prototype. Read `README.md` and
 `docs/ALAN_WORKFLOW.md` before extending it. The deliberately scripted
 mechanics checks must stay green, and they must stay labelled as scripted.
 
@@ -98,7 +98,8 @@ pytest temp directory is not readable.
 ## Where to change things
 
 - New action type: `recipe.py` validation + `browser.py` execution + a
-  mechanics or integration test. Update `docs/PROGRESS.md`.
+  mechanics or integration test. Update `README.md` and
+  `docs/ALAN_WORKFLOW.md`.
 - New expectation kind: `expectations.py` schema + `check.py` evaluation, with
   explicit passed/failed/error semantics. Only `heading_text` and
   `region_text_exact` exist; do not turn this into a general assertion language.
@@ -125,7 +126,7 @@ pytest temp directory is not readable.
 - `.\.venv\Scripts\python.exe -m pytest` passes.
 - Both buggy/fixed CLI demos (accounts and tasks) still produce exit codes 1
   and 0 respectively.
-- Any new claim is marked implemented vs planned in `docs/PROGRESS.md`.
+- Any new claim is reflected in `README.md` and `docs/ALAN_WORKFLOW.md`.
 - The HTML report is still self-contained: no scripts, no network requests,
   only explicitly selected runs or the selected exploration.
 - No dashboard, database, auth system, auto-patching or GitHub integration is
