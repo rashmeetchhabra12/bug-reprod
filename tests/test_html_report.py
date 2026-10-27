@@ -38,7 +38,7 @@ def _make_run(
     driver: str = "alan-agent",
     status: str = "failed",
     recipe_fp: str | None = RECIPE_FP,
-    expectation_fp: str = EXPECT_FP,
+    expectation_fp: str | None = EXPECT_FP,
     bug_report: str = "A normal report.",
     expectation_text: str = "Prepare hackathon demo",
     rationale: str = "Open the page to see the controls.",
@@ -224,7 +224,7 @@ def test_missing_recipe_fingerprint_is_flagged(tmp_path: Path) -> None:
     unchanged, reasons = compare_fingerprints(runs.values())
 
     assert unchanged is False
-    assert any("no exported recipe fingerprint" in reason for reason in reasons)
+    assert any("recipe fingerprint is missing" in reason for reason in reasons)
 
 
 def test_screenshot_outside_the_run_is_not_embedded(tmp_path: Path) -> None:
@@ -284,3 +284,47 @@ def test_write_report_creates_parent_directory(tmp_path: Path) -> None:
     target = write_report_html(tmp_path / "nested" / "dir" / "report.html", runs)
     assert target.is_file()
     assert "<!doctype html>" in target.read_text(encoding="utf-8")
+
+def test_no_replay_does_not_claim_unchanged_replay(tmp_path: Path) -> None:
+    attempt = _make_run(tmp_path, "attempt-only")
+    run = load_report_run(attempt, "attempt")
+
+    unchanged, reasons = compare_fingerprints([run])
+    html = render_report_html({"attempt": run})
+
+    assert unchanged is False
+    assert any("No buggy or fixed replay run was selected." in reason for reason in reasons)
+    assert "does not represent an unchanged replay" in html
+    assert "Unchanged replay verified" not in html
+
+
+def test_missing_expectation_fingerprint_is_flagged(tmp_path: Path) -> None:
+    runs = _load_three(tmp_path, buggy={"expectation_fp": None})
+    unchanged, reasons = compare_fingerprints(runs.values())
+
+    assert unchanged is False
+    assert any("expectation fingerprint is missing" in reason for reason in reasons)
+
+
+def test_driver_specific_labels(tmp_path: Path) -> None:
+    scripted_attempt = load_report_run(
+        _make_run(tmp_path, "scripted-attempt", driver="scripted-test"),
+        "attempt",
+    )
+    model_attempt = load_report_run(
+        _make_run(tmp_path, "model-attempt", driver="alan-agent"),
+        "attempt",
+    )
+    buggy_replay = load_report_run(
+        _make_run(tmp_path, "buggy-replay", driver="recorded-replay"),
+        "buggy",
+    )
+    scripted_fixed = load_report_run(
+        _make_run(tmp_path, "scripted-fixed", driver="scripted-test"),
+        "fixed",
+    )
+
+    assert scripted_attempt.label == "Scripted attempt"
+    assert model_attempt.label == "Original model-driven attempt"
+    assert buggy_replay.label == "Replay against buggy version"
+    assert scripted_fixed.label == "Scripted run against fixed version"

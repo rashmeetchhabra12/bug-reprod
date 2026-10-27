@@ -87,7 +87,11 @@ if port 8103 or 8104 is occupied and never kills an unrelated process.
 - No automatic fix and no root-cause proof. A failed check is an observation
   about the executed sequence.
 - Local loopback targets only; Chromium only.
+- Service workers are disabled so they cannot bypass request interception; an
+  app that requires a service worker will not work under this harness.
 - Two expectation kinds; no general assertion language.
+- A content check waits for the expected text up to its timeout. Static but
+  wrong content therefore takes the full timeout before reporting `failed`.
 - One action per CLI call; no first-class model tool schema or provider API.
 - Exploration findings are conservative: only a replay-confirmed, error-free
   failure is a `violation`; a passing scenario is not a bug-free claim.

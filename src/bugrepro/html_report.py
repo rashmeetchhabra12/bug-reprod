@@ -63,7 +63,24 @@ class ReportRun:
 
     @property
     def label(self) -> str:
-        return ROLE_LABELS.get(self.role, self.role)
+        role = self.role
+        driver = self.driver
+        if role == "attempt":
+            return {
+                "alan-agent": "Original model-driven attempt",
+                "scripted-test": "Scripted attempt",
+                "recorded-replay": "Recorded replay",
+            }.get(driver, f"Attempt (driver: {driver})")
+        if role in {"buggy", "fixed"}:
+            target = "buggy version" if role == "buggy" else "fixed version"
+            if driver == "recorded-replay":
+                return f"Replay against {target}"
+            if driver == "alan-agent":
+                return f"Alan-driven run against {target}"
+            if driver == "scripted-test":
+                return f"Scripted run against {target}"
+            return f"Run against {target} (driver: {driver})"
+        return ROLE_LABELS.get(role, role)
 
     @property
     def run_id(self) -> str:
@@ -198,30 +215,45 @@ def _observed_text(run: ReportRun) -> str:
 
 
 def _comparison(runs: dict[str, ReportRun]) -> tuple[bool, list[str]]:
-    """Return (is_unchanged_replay, reasons)."""
-    reasons: list[str] = []
-    fingerprints: dict[str, str | None] = {
-        role: run.recipe_fingerprint for role, run in runs.items()
-    }
-    expectations: dict[str, str | None] = {
-        role: run.expectation_fingerprint for role, run in runs.items()
-    }
+    """Return (is_unchanged_replay, reasons).
 
-    known_recipes = {value for value in fingerprints.values() if value}
+    An unchanged replay claim requires at least one replay run, all selected
+    recipe and expectation fingerprints present, identical fingerprints across
+    the selected runs, and the honest driver labels.
+    """
+    reasons: list[str] = []
+    order = [role for role in ("attempt", "buggy", "fixed") if role in runs]
+    replays = [role for role in ("buggy", "fixed") if role in runs]
+
+    if not replays:
+        reasons.append("No buggy or fixed replay run was selected.")
+
+    for role in order:
+        run = runs[role]
+        if not run.recipe_fingerprint:
+            reasons.append(f"{run.label}: recipe fingerprint is missing.")
+        if not run.expectation_fingerprint:
+            reasons.append(f"{run.label}: expectation fingerprint is missing.")
+
+    known_recipes = {
+        run.recipe_fingerprint for run in runs.values() if run.recipe_fingerprint
+    }
     if len(known_recipes) > 1:
         reasons.append("Recipe fingerprints differ between the selected runs.")
-    if len(fingerprints) > 1 and any(value is None for value in fingerprints.values()):
-        reasons.append("At least one selected run has no exported recipe fingerprint.")
 
-    known_expectations = {value for value in expectations.values() if value}
+    known_expectations = {
+        run.expectation_fingerprint
+        for run in runs.values()
+        if run.expectation_fingerprint
+    }
     if len(known_expectations) > 1:
         reasons.append("Expectation fingerprints differ between the selected runs.")
 
-    for role in ("buggy", "fixed"):
-        run = runs.get(role)
-        if run is not None and run.driver != "recorded-replay":
+    for role in replays:
+        run = runs[role]
+        if run.driver != "recorded-replay":
             reasons.append(
-                f'The "{ROLE_LABELS[role]}" run is not a deterministic replay '
+                f'"{run.label}" is not a deterministic replay '
                 f"(driver: {run.driver})."
             )
 
@@ -270,7 +302,7 @@ def _summary_card(run: ReportRun) -> str:
           </div>
         </div>
         <dl class="facts">
-          <div><dt>Driver</dt><dd>{_esc(run.driver)}<span class="muted"> — {_esc(DRIVER_MEANINGS.get(run.driver, "Unrecognised driver."))}</span></dd></div>
+          <div><dt>Driver</dt><dd>{_esc(run.driver)}<span class="muted"> â€” {_esc(DRIVER_MEANINGS.get(run.driver, "Unrecognised driver."))}</span></dd></div>
           <div><dt>Model</dt><dd>{_esc(model_id)} <span class="muted">(source: {_esc(model_source)})</span></dd></div>
           <div><dt>Attempt status</dt><dd>{_esc(attempt_status)}</dd></div>
           <div><dt>Action budget</dt><dd>{_esc(used)} used / {_esc(limit)} allowed ({_esc(remaining)} remaining)</dd></div>
@@ -362,7 +394,7 @@ def _final_states(runs: dict[str, ReportRun]) -> str:
         run = runs[role]
         shot = _final_screenshot(run)
         caption = (
-            f"{run.label} — {STATUS_LABELS.get(run.status, run.status)} — "
+            f"{run.label} â€” {STATUS_LABELS.get(run.status, run.status)} â€” "
             f"observed: {_observed_text(run)}"
         )
         cards.append(_image_block(run, shot, caption))
@@ -412,7 +444,7 @@ def _action_details(run: ReportRun) -> str:
         )
         input_json = json.dumps(action.get("input") or {}, indent=2, ensure_ascii=False)
         shot_html = (
-            _image_block(run, shot, f"Action {index} — {action_type}")
+            _image_block(run, shot, f"Action {index} â€” {action_type}")
             if shot
             else ""
         )
@@ -642,7 +674,7 @@ def _attempt_context_card(run: ReportRun) -> str:
         return f"""
     <section class="card">
       <h2>Requirement and scenario</h2>
-      <p><strong>{_esc(requirement_id)}</strong> — {_esc(requirement_text)}</p>
+      <p><strong>{_esc(requirement_id)}</strong> â€” {_esc(requirement_text)}</p>
       <p><strong>{_esc(scenario_title)}</strong></p>
       <p class="muted small">{_esc(scenario_description)}</p>
       <p class="muted small">Test data: {_esc(', '.join(str(x) for x in test_data) or 'none')}</p>
@@ -675,14 +707,14 @@ def render_report_html(runs: dict[str, ReportRun]) -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Bug Repro evidence report — {_esc(attempt.run_id)}</title>
+  <title>Bug Repro evidence report â€” {_esc(attempt.run_id)}</title>
   <style>{CSS}</style>
 </head>
 <body>
   <div class="wrap">
     <header class="page">
       <h1>Bug Repro evidence report</h1>
-      <p class="muted">Generated {_esc(_utc_now())} · self-contained file · no scripts ·
+      <p class="muted">Generated {_esc(_utc_now())} Â· self-contained file Â· no scripts Â·
         source run <code>{_esc(attempt.run_id)}</code></p>
     </header>
 
@@ -716,9 +748,10 @@ def render_report_html(runs: dict[str, ReportRun]) -> str:
       <p><strong>Reading this honestly.</strong> A failed check means the expected
         result was not observed after this sequence. It is an assertion about the
         page, not proof of the underlying cause.</p>
-      <p>Live agent decisions are labelled <code>alan-agent</code>; deterministic
-        replays are labelled <code>recorded-replay</code> and make no model calls.
-        Model identity is session-reported, not provider-verified.</p>
+      <p>Live agent decisions are labelled <code>alan-agent</code>; scripted actions
+        are labelled <code>scripted-test</code>; deterministic replays are labelled
+        <code>recorded-replay</code> and make no model calls. Model identity is
+        session-reported, not provider-verified.</p>
       <p>This file is static. It does not contact the browser service.</p>
     </footer>
   </div>
@@ -970,7 +1003,7 @@ def _exploration_summary_card(report: ExplorationReport) -> str:
 <div class="summary-head">
           {_exploration_status_badge(status)}
           <div>
-            <h2>Requirement-guided exploration — {_esc(status)}</h2>
+            <h2>Requirement-guided exploration â€” {_esc(status)}</h2>
             <p class="muted">{_esc(manifest.get("description", ""))}</p>
           </div>
         </div>
@@ -1081,7 +1114,7 @@ def _exploration_findings(report: ExplorationReport) -> str:
             _image_block(
                 run,
                 shot,
-                f"{scenario_id} — {scenario.get('classification')} — observed: "
+                f"{scenario_id} â€” {scenario.get('classification')} â€” observed: "
                 f"{_observed_text(run)}",
             )
             if run
@@ -1105,7 +1138,7 @@ def _exploration_findings(report: ExplorationReport) -> str:
         <h3>{_classification_badge(scenario.get("classification"))}
           {_esc(scenario.get("title", ""))}</h3>
         <p class="req"><strong>{_esc(scenario.get("requirement_id", ""))}</strong>
-          — {_esc(requirement.get("text", scenario.get("requirement_text", "")))}</p>
+          â€” {_esc(requirement.get("text", scenario.get("requirement_text", "")))}</p>
         <div class="finding-grid">
           <div>
             <h4>Frozen expectation</h4>
@@ -1291,14 +1324,14 @@ def _exploration_untested(report: ExplorationReport) -> str:
         parts.append("<h3>Requirements with no scenario</h3><ul>")
         for item in untested:
             parts.append(
-                f"<li><strong>{_esc(item.get('id'))}</strong> — {_esc(item.get('text'))}</li>"
+                f"<li><strong>{_esc(item.get('id'))}</strong> â€” {_esc(item.get('text'))}</li>"
             )
         parts.append("</ul>")
     if not_evaluated:
         parts.append("<h3>Scenarios that did not evaluate their requirement</h3><ul>")
         for item in not_evaluated:
             parts.append(
-                f"<li><strong>{_esc(item.get('id'))}</strong> — {_esc(item.get('text'))}</li>"
+                f"<li><strong>{_esc(item.get('id'))}</strong> â€” {_esc(item.get('text'))}</li>"
             )
         parts.append("</ul>")
     if not parts:
@@ -1339,14 +1372,14 @@ def render_exploration_html(report: ExplorationReport) -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Bug Repro exploration — {_esc(manifest.get("exploration_id", ""))}</title>
+  <title>Bug Repro exploration â€” {_esc(manifest.get("exploration_id", ""))}</title>
   <style>{CSS}</style>
 </head>
 <body>
   <div class="wrap">
     <header class="page">
       <h1>Bug Repro exploration report</h1>
-      <p class="muted">Generated {_esc(_utc_now())} · self-contained file · no scripts ·
+      <p class="muted">Generated {_esc(_utc_now())} Â· self-contained file Â· no scripts Â·
         exploration <code>{_esc(manifest.get("exploration_id", ""))}</code></p>
     </header>
 
@@ -1367,7 +1400,8 @@ def render_exploration_html(report: ExplorationReport) -> str:
       <p>A scenario pass means only that the frozen expectation was observed in
         that scenario. It does not establish that the application is bug-free.
         A failure is an observation about the sequence, not proof of a root cause.</p>
-      <p>Live decisions are labelled <code>alan-agent</code>; replays are labelled
+      <p>Live decisions are labelled <code>alan-agent</code>; scripted actions are
+        labelled <code>scripted-test</code>; replays are labelled
         <code>recorded-replay</code> and make no model calls. Model identity is
         session-reported, not provider-verified.</p>
       <p>This file is static. It does not contact the browser service and includes

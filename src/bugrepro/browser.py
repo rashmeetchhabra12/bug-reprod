@@ -115,7 +115,8 @@ class PlaywrightHost:
         self._assert_owning_thread()
         if self._browser is None:
             raise BrowserStartupError("Browser host has not been started.")
-        context = self._browser.new_context()
+        # Service workers can bypass request interception in Chromium.
+        context = self._browser.new_context(service_workers="block")
         context.set_default_timeout(timeout_ms)
         context.set_default_navigation_timeout(timeout_ms * 2)
         return context
@@ -163,6 +164,7 @@ class BrowserSession:
         self._owned_host: PlaywrightHost | None = None
         self._host = host
         self._context: BrowserContext | None = None
+        self._cdp: Any | None = None
         self.page: Page | None = None
         self.blocked_requests: list[str] = []
 
@@ -172,10 +174,16 @@ class BrowserSession:
                 self._owned_host = PlaywrightHost(headless=self.headless).start()
                 self._host = self._owned_host
             self._context = self._host.new_context(timeout_ms=self.timeout_ms)
-            # A local app must not be able to bounce the browser to the internet
-            # or load remote subresources. Every request is checked.
-            self._context.route("**/*", self._guard_route)
             self.page = self._context.new_page()
+            # CDP Fetch validates every request, including each redirect hop,
+            # before it reaches the network. Playwright's route handler does not
+            # intercept redirect destinations reliably.
+            self._cdp = self._context.new_cdp_session(self.page)
+            self._cdp.on("Fetch.requestPaused", self._guard_request)
+            self._cdp.send(
+                "Fetch.enable",
+                {"patterns": [{"urlPattern": "*", "requestStage": "Request"}]},
+            )
         except BrowserStartupError:
             self.close()
             raise
@@ -187,13 +195,28 @@ class BrowserSession:
             ) from exc
         return self
 
-    def _guard_route(self, route: Any) -> None:
-        request_url = route.request.url
-        if is_loopback_url(request_url):
-            route.continue_()
+    def _guard_request(self, event: Any) -> None:
+        """Continue loopback requests and abort everything else before network."""
+        request_id = event.get("requestId")
+        request_url = (event.get("request") or {}).get("url", "")
+        if not request_id:
             return
-        self.blocked_requests.append(_describe_url(request_url))
-        route.abort("blockedbyclient")
+        try:
+            if is_loopback_url(request_url):
+                self._cdp.send(
+                    "Fetch.continueRequest", {"requestId": request_id}
+                )
+            else:
+                self.blocked_requests.append(_describe_url(request_url))
+                self._cdp.send(
+                    "Fetch.failRequest",
+                    {
+                        "requestId": request_id,
+                        "errorReason": "BlockedByClient",
+                    },
+                )
+        except Exception:  # noqa: BLE001 - request may already be gone
+            pass
 
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         self.close()
@@ -206,6 +229,7 @@ class BrowserSession:
             except Exception:  # noqa: BLE001 - cleanup must never mask the result
                 pass
         self.page = None
+        self._cdp = None
         self._context = None
         if self._owned_host is not None:
             self._owned_host.close()

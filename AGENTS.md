@@ -52,8 +52,10 @@ pytest temp directory is not readable.
    strings, raw JavaScript, or CSS/XPath locator fields. Extend `recipe.py`
    with explicit validation instead.
 3. **Loopback only.** All targets pass through `safety.validate_base_url`.
-   Do not add a bypass, redirect following to another origin, or non-loopback
-   support without updating the threat model and tests.
+   Do not add a bypass or non-loopback support without updating the threat
+   model and tests. Request interception uses CDP `Fetch` and blocks service
+   workers; do not replace it with `context.route`, which does not reliably
+   intercept redirect destinations.
 4. **One execution engine.** `BrowserSession` in `browser.py` is the only
    place Playwright drives a page. Scripted runs and the service both use it.
    Do not add a second browser engine.
@@ -70,21 +72,24 @@ pytest temp directory is not readable.
    `execution_errors` (browser/session) both force check status `error`. A
    timeout, missing element, budget exhaustion or browser crash is never a
    reproduced bug.
-9. **No secrets in the repo or logs.** The service token lives only in a
-   per-user state file outside the repository. Never print it, accept it as a
-   command argument, or write it into a run directory. Never read or copy Alan
-   credentials, `local-api.json`, provider auth files, or API keys.
-10. **Driver labels must stay honest.** `alan-agent` only when a model chose
+9. **Wait for content, not just the container.** `check.py` waits for the
+   expected heading/region content up to the timeout. A present container with
+   wrong content is `failed`; a missing container is `error`.
+10. **No secrets in the repo or logs.** The service token lives only in a
+    per-user state file outside the repository. Never print it, accept it as a
+    command argument, or write it into a run directory. Never read or copy Alan
+    credentials, `local-api.json`, provider auth files, or API keys.
+11. **Driver labels must stay honest.** `alan-agent` only when a model chose
     the actions; `scripted-test` for pre-written sequences;
     `recorded-replay` for replays. Never describe a scripted run as AI.
-11. **Exploration requirements are user-owned and frozen.** Requirements and
+12. **Exploration requirements are user-owned and frozen.** Requirements and
     allowed test data come only from the validated exploration spec. A scenario
     must reference an existing requirement; it can never add, reword or replace
     one, and it freezes its expectation before the first action.
-12. **Exploration stays bounded.** At most 3 scenarios, at most 60 browser
+13. **Exploration stays bounded.** At most 3 scenarios, at most 60 browser
     actions in total (scenario plus replay-confirmation actions), and at most 20
     actions per scenario. Existing per-session timeouts still apply.
-13. **Exploration findings are conservative.** `violation` requires an
+14. **Exploration findings are conservative.** `violation` requires an
     error-free failed expectation whose exported recipe reproduces the same
     observation in a fresh context on the same target. Action failures,
     execution errors, crashes and budget exhaustion are never product findings;

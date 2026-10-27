@@ -426,7 +426,11 @@ selected exploration and the runs it references.
 - Supported expectations: a level-N heading text, or an exact list-item text in
   an accessible region. There is no general assertion language.
 - One action per CLI call; an investigation is several calls.
-- Chromium only.
+- Chromium only. Service workers are blocked so they cannot bypass request
+  interception; apps that require service workers are unsupported.
+- Expectation checks wait for the expected content within the timeout. A
+  container that appears before its content is handled; static wrong content
+  takes the full timeout before reporting `failed`.
 - The action budget, idle timeouts and the service token bound the session;
   they do not sandbox the local app.
 - Reproduction evidence does **not** establish the root cause. It records what
