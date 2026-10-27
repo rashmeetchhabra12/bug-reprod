@@ -1,8 +1,8 @@
 # Alan investigation workflow
 
-This is the operator workflow for Phase 3. It was exercised on this machine
+This is the operator workflow. It was exercised on this machine
 (Windows 11, PowerShell 5.1, Python 3.13 in `.venv`) for the task-list fixture
-and again for the Phase 2 account-switching fixture.
+and again for the account-switching fixture.
 
 The Alan session is the decision maker. The local service is the executor. No
 model API is called by this project.
@@ -29,7 +29,7 @@ process. Stop it with `.\scripts\demo.ps1 stop`. A complete guided path is in
 ## 2. Start the two fixture builds
 
 Pick two free loopback ports. The commands below use `8103` and `8104` for the
-task-list fixture; use `--app accounts` for the Phase 2 fixture.
+task-list fixture; use `--app accounts` for the account-switching fixture.
 
 ```powershell
 # buggy build

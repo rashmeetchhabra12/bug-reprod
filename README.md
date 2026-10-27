@@ -233,7 +233,7 @@ Exit codes for `run` / `replay`:
 | 1 | Expectation failed (the reported bug was reproduced) |
 | 2 | Execution error / inconclusive |
 
-## Persistent agent service (Phase 2)
+## Persistent agent service
 
 The service owns Playwright on a background worker thread and keeps one
 browser context per investigation alive across separate CLI invocations. All
@@ -291,7 +291,7 @@ Guarantees:
 - `export` writes `recipe.json` inside the run directory. `replay` then runs
   it against any loopback URL with no model decisions.
 
-## HTML evidence report (Phase 3)
+## HTML evidence report
 
 Turn the selected runs into one portable file with embedded screenshots:
 
