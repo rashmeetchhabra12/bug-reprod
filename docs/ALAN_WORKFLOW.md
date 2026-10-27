@@ -16,6 +16,16 @@ Run everything from the repository root.
 .\.venv\Scripts\python.exe -m playwright install chromium
 ```
 
+For the task fixture and a local service in one step:
+
+```powershell
+.\scripts\demo.ps1 start
+```
+
+It refuses to start if port 8103 or 8104 is occupied and never kills another
+process. Stop it with `.\scripts\demo.ps1 stop`. A complete guided path is in
+[`DEMO.md`](DEMO.md).
+
 ## 2. Start the two fixture builds
 
 Pick two free loopback ports. The commands below use `8103` and `8104` for the

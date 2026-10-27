@@ -612,15 +612,60 @@ details.scenario-detail[open] > summary { border-bottom:1px solid var(--line); }
 """
 
 
+def _attempt_context_card(run: ReportRun) -> str:
+    base_url = run.data.get("base_url") or "(unknown)"
+    bug_report = run.data.get("bug_report")
+    requirement = run.data.get("requirement") or {}
+    scenario = run.data.get("scenario") or {}
+
+    if bug_report:
+        return f"""
+    <section class="card">
+      <h2>Bug report</h2>
+      <blockquote class="bugreport">{_esc(bug_report)}</blockquote>
+      <p class="muted small">Target: <code>{_esc(base_url)}</code></p>
+    </section>
+        """
+
+    if requirement or scenario:
+        test_data = scenario.get("test_data") or []
+        requirement_id = requirement.get("id") or "(no requirement id)"
+        requirement_text = requirement.get("text") or "(no requirement wording recorded)"
+        scenario_title = scenario.get("title") or "(no scenario title)"
+        scenario_description = scenario.get("description") or ""
+        exploration_id = run.data.get("exploration_id") or ""
+        exploration_note = (
+            f'<p class="muted small">Exploration: <code>{_esc(exploration_id)}</code></p>'
+            if exploration_id
+            else ""
+        )
+        return f"""
+    <section class="card">
+      <h2>Requirement and scenario</h2>
+      <p><strong>{_esc(requirement_id)}</strong> — {_esc(requirement_text)}</p>
+      <p><strong>{_esc(scenario_title)}</strong></p>
+      <p class="muted small">{_esc(scenario_description)}</p>
+      <p class="muted small">Test data: {_esc(', '.join(str(x) for x in test_data) or 'none')}</p>
+      <p class="muted small">Target: <code>{_esc(base_url)}</code></p>
+      {exploration_note}
+    </section>
+        """
+
+    return f"""
+    <section class="card">
+      <h2>Context</h2>
+      <p class="muted">No bug report or exploration requirement was recorded for this run.</p>
+      <p class="muted small">Target: <code>{_esc(base_url)}</code></p>
+    </section>
+    """
+
+
 def render_report_html(runs: dict[str, ReportRun]) -> str:
     """Render the selected runs. ``runs`` must contain ``attempt``."""
     if "attempt" not in runs:
         raise ReportError("A report needs an 'attempt' run.")
     attempt = runs["attempt"]
     unchanged, reasons = _comparison(runs)
-
-    bug_report = str(attempt.data.get("bug_report") or "(not recorded)")
-    base_url = attempt.data.get("base_url") or "(unknown)"
 
     final_states = _final_states(runs)
     comparison = _comparison_table(runs, unchanged, reasons)
@@ -641,11 +686,7 @@ def render_report_html(runs: dict[str, ReportRun]) -> str:
         source run <code>{_esc(attempt.run_id)}</code></p>
     </header>
 
-    <section class="card">
-      <h2>Bug report</h2>
-      <blockquote class="bugreport">{_esc(bug_report)}</blockquote>
-      <p class="muted small">Target: <code>{_esc(base_url)}</code></p>
-    </section>
+    {_attempt_context_card(attempt)}
 
     {_summary_card(attempt)}
 

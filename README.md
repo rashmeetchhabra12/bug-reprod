@@ -1,18 +1,97 @@
 # Bug Repro
 
-A small, honest prototype for turning a written web-app bug report into a
-**replayable browser test with evidence**.
+Bug Repro turns a local web app into **replayable browser evidence**. A written
+bug report, or a set of user-authored expected behaviours, is investigated by
+the Alan model through a small local tool interface. Every action is recorded,
+the expected result is checked independently, and the same sequence can be
+replayed after a manual fix without any new model decisions.
 
-You give it a local app URL, a written bug report, and a fixed human
-expectation. It drives Chromium with Playwright, records every action, checks
-the expectation, and writes a report plus screenshots into a unique run
-directory. After a manual fix, the same recipe can be replayed against another
-local URL.
+> **Recorded demonstration:** open
+> [`showcase/index.html`](showcase/index.html) for selected self-contained
+> before/after evidence. It is static recorded evidence, not a live service.
 
-> **Phase 4 status: bounded, requirement-guided exploration.** The Alan session
-> can now start from user-authored requirements instead of a known bug, propose
-> scenarios, freeze one expectation per scenario, and record classified findings
-> with replay confirmation. Reproduction and replay are unchanged.
+## What it does
+
+- **Explore** a local app from user requirements: the agent proposes scenarios,
+  freezes one supported expectation per scenario, and records classifications.
+- **Reproduce** a written bug report with a fixed expected result, keeping the
+  expectation separate and immutable.
+- **Replay** the exact executed sequence against another local build with no
+  model calls, and compare the original attempt with buggy and fixed replays.
+- **Report** the result as a self-contained HTML file with embedded screenshots,
+  rationales, fingerprints and an honest outcome label.
+
+## Who it is for
+
+Hackathon judges, reviewers and developers who need to see **what was actually
+executed** and **what the page actually showed** for a known local fixture. It
+is a demonstration-quality prototype, not a testing service and not a
+bug-discovery benchmark.
+
+## Who decides what
+
+- **Alan's model decides live actions.** It reads the report or requirements,
+  observes the page, and calls local CLI tools one action at a time. The model
+  identity is session-reported.
+- **Bug Repro executes and checks.** It validates every action against a small
+  JSON schema, enforces loopback-only targets, drives Chromium, freezes the
+  expectation and records the result.
+- **Recorded replays decide nothing.** Replay runs a saved recipe in a fresh
+  context and reports `recorded-replay`.
+- **HTML reports only display recorded evidence.** They do not launch the agent,
+  contact the service or make model calls.
+
+## Explore, reproduce and replay
+
+| Workflow | Input | What runs | Output |
+| --- | --- | --- | --- |
+| Explore | requirements + allowed test data | agent-proposed scenarios | classified findings with replay confirmation |
+| Reproduce | bug report + expected result | agent-chosen actions | one check result and a replayable recipe |
+| Replay | saved recipe | no model | identical check result on another build |
+
+Exploration is bounded to 3 scenarios and 60 browser actions. Expectations are
+limited to a heading text or an exact list item in an accessible region.
+
+## Quickstart (Windows 11, PowerShell 5.1)
+
+Tested with Python 3.13.14, Playwright 1.64.1 and Chromium build 1248.
+
+```powershell
+# from the repository root
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -m playwright install chromium
+
+# start the task fixture (buggy 8103, fixed 8104) and the local agent service
+.\scripts\demo.ps1 start
+# opens: http://127.0.0.1:8103 and http://127.0.0.1:8104
+
+# stop only the processes this script started
+.\scripts\demo.ps1 stop
+```
+
+Verify the repository:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest
+```
+
+The recommended end-to-end demonstration is
+[`docs/DEMO.md`](docs/DEMO.md). The full operator guide and reusable prompts are
+in [`docs/ALAN_WORKFLOW.md`](docs/ALAN_WORKFLOW.md). The script refuses to start
+if port 8103 or 8104 is occupied and never kills an unrelated process.
+
+## Current limitations
+
+- Known-app demonstrations, not blind exploration of an unfamiliar product.
+- No automatic fix and no root-cause proof. A failed check is an observation
+  about the executed sequence.
+- Local loopback targets only; Chromium only.
+- Two expectation kinds; no general assertion language.
+- One action per CLI call; no first-class model tool schema or provider API.
+- Exploration findings are conservative: only a replay-confirmed, error-free
+  failure is a `violation`; a passing scenario is not a bug-free claim.
+- No dashboard, cloud service, deployment or publication.
 
 ## What is implemented
 
@@ -42,7 +121,7 @@ local URL.
   replay confirmation, and an exploration HTML report.
 - Explicit scripted mechanics checks for every layer.
 
-The full operator workflow, including a reusable investigation prompt, is in
+The full operator workflow, including reusable investigation prompts, is in
 [`docs/ALAN_WORKFLOW.md`](docs/ALAN_WORKFLOW.md).
 
 ## What is deliberately not implemented
@@ -57,20 +136,7 @@ The full operator workflow, including a reusable investigation prompt, is in
 - Blind bug discovery. Explorations are bounded and requirement-guided; the
   live demonstrations are known-app.
 
-## Setup (Windows 11, PowerShell 5.1)
-
-Verified on this machine with Python 3.13.14, Playwright 1.64.1 and Chromium
-build 1248. Python 3.11+ is supported.
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
-.\.venv\Scripts\python.exe -m playwright install chromium
-```
-
-This workspace already has `.venv` prepared.
-
-## View the demo
+## View the account fixture
 
 Start the two builds in two terminals:
 
@@ -416,9 +482,14 @@ src/bugrepro/
   task_app/          task-list fixture (reload persistence)
 recipes/             saved recipes
 examples/            reports, expectations, action files and exploration specs
+scripts/             demo.ps1 start/stop convenience script
+showcase/            shareable static evidence showcase (selected reports)
 tests/               validation, safety, mechanics, service, report, exploration
 docs/PROGRESS.md     status, model-connection findings, live-run results
 docs/ALAN_WORKFLOW.md operator workflow and reusable prompts
+docs/DEMO.md         one recommended end-to-end demonstration path
+docs/DEMO_SCRIPT.md  two-minute video walkthrough script
+LICENSE              MIT
 ```
 
 ## Model connection
@@ -430,3 +501,14 @@ as a tool, one action at a time, from its own observations. Alan credits are
 not an API key and no public Alan model endpoint is documented, so nothing
 here calls a model API. The confirmed facts, blockers and the live run are
 recorded in `docs/PROGRESS.md`.
+
+## Recorded showcase
+
+[`showcase/index.html`](showcase/index.html) is a small static package with
+selected self-contained evidence reports and local-run instructions. It is
+recorded demonstration evidence, not a hosted service and not a claim of live
+cloud testing.
+
+## License
+
+MIT. See [`LICENSE`](LICENSE).
