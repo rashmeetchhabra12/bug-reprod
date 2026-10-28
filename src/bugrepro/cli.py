@@ -393,6 +393,30 @@ def build_parser() -> argparse.ArgumentParser:
         scenario_cmd.add_argument("--exploration", required=True)
         scenario_cmd.add_argument("--scenario", required=True)
 
+    investigate_parser = sub.add_parser(
+        "investigate", help="investigate with a configured model endpoint"
+    )
+    investigate_parser.add_argument("--target", required=True)
+    investigate_parser.add_argument("--report-file", required=True)
+    investigate_parser.add_argument("--expectation-file", required=True)
+    investigate_parser.add_argument(
+        "--decision-backend", choices=("model-endpoint", "codex-cli"),
+        default="model-endpoint", help="decision provider (default: model-endpoint)"
+    )
+    investigate_parser.add_argument(
+        "--model-endpoint", help="full Chat Completions URL; required for model-endpoint"
+    )
+    investigate_parser.add_argument(
+        "--model", help="required for model-endpoint; optional requested Codex model"
+    )
+    investigate_parser.add_argument("--api-key-env", default="OPENAI_API_KEY")
+    investigate_parser.add_argument("--model-timeout", type=_positive_float, default=60)
+    investigate_parser.add_argument("--model-call-limit", type=_positive_int, default=25)
+    investigate_parser.add_argument("--action-budget", type=_positive_int, default=20)
+    investigate_parser.add_argument("--timeout-ms", type=_positive_int, default=10000)
+    investigate_parser.add_argument("--run-root", default="runs")
+    investigate_parser.add_argument("--label", default="investigation")
+    investigate_parser.add_argument("--headed", action="store_true")
     return parser
 
 
@@ -713,8 +737,53 @@ def _cmd_report(args) -> int:
     return EXIT_PASSED
 
 
+def _cmd_investigate(args) -> int:
+    from .model_driver import ModelClient, ModelError, investigate
+
+    try:
+        driver = "model-agent"
+        if args.decision_backend == "codex-cli":
+            from .codex_driver import CodexClient
+
+            if args.model_endpoint:
+                raise ModelError("--model-endpoint cannot be used with --decision-backend codex-cli.")
+            model_client = CodexClient(model=args.model, timeout=args.model_timeout)
+            driver = "codex-cli"
+        else:
+            if not args.model_endpoint or not args.model:
+                raise ModelError("The model-endpoint backend requires --model-endpoint and --model.")
+            model_client = ModelClient(
+                args.model_endpoint, args.model, args.api_key_env, args.model_timeout
+            )
+        result = investigate(
+            target=args.target,
+            bug_report=Path(args.report_file).read_text(encoding="utf-8-sig"),
+            expectation=_read_json_object(args.expectation_file, "expectation file"),
+            model_client=model_client,
+            run_root=args.run_root,
+            label=args.label,
+            action_budget=args.action_budget,
+            model_call_limit=args.model_call_limit,
+            timeout_ms=args.timeout_ms,
+            headed=args.headed,
+            driver=driver,
+        )
+    except Exception as exc:  # provider and input diagnostics may contain secrets
+        message = (
+            str(exc) if isinstance(exc, ModelError)
+            else "Could not complete investigation; check input files, target and browser setup."
+        )
+        print(json.dumps({"status": "error", "error": message}))
+        return EXIT_ERROR
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return _exit_code((result.get("check") or {}).get("status", "error"))
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    if args.command == "investigate":
+        return _cmd_investigate(args)
 
     if args.command == "serve":
         try:

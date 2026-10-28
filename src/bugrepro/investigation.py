@@ -39,7 +39,7 @@ from .runner import (
 )
 
 SCHEMA_VERSION = 2
-INVESTIGATION_DRIVERS = frozenset({"alan-agent", "scripted-test"})
+INVESTIGATION_DRIVERS = frozenset({"alan-agent", "model-agent", "codex-cli", "scripted-test"})
 MODEL_SOURCES = frozenset({"session-reported", "unavailable"})
 TERMINAL_ATTEMPT_STATUSES = frozenset({"finished", "closed", "crashed"})
 
@@ -122,6 +122,7 @@ class Investigation:
         self.check: CheckResult | None = None
         self.last_result: dict[str, Any] | None = None
         self.last_observation: Observation | None = None
+        self.model_calls: dict[str, int] | None = None
         self.extra_evidence: list[str] = []
 
         self.exported = False
@@ -505,6 +506,13 @@ class Investigation:
         return evidence
 
     # -------------------------------------------------------------- finish
+    def record_execution_error(self, stage: str, message: str) -> None:
+        """Record a driver failure without changing the frozen expectation."""
+        self._ensure_active("record an execution error")
+        self.touch()
+        self.execution_errors.append({"stage": stage, "error": message})
+        self._write_record()
+
     def finish(self) -> dict[str, Any]:
         if self.attempt_status == "finished":
             return self._finish_response()
@@ -715,6 +723,8 @@ class Investigation:
         }
         if self.bug_report is not None:
             document["bug_report"] = self.bug_report
+        if self.model_calls is not None:
+            document["model_calls"] = dict(self.model_calls)
         if self.requirement is not None:
             document["requirement"] = self.requirement
         if self.scenario is not None:

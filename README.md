@@ -2,7 +2,7 @@
 
 A CLI toolkit for investigating web-app bugs, recording browser evidence, and replaying the same checks after a fix.
 
-Bug Repro separates browser execution from agent decisions. An external agent chooses actions through the CLI; the tool validates and executes them, captures observations and screenshots, and checks a fixed expected result. Saved sequences can be replayed without further model calls.
+Bug Repro separates browser execution from agent decisions. A configured model or external agent chooses actions; the tool validates and executes them, captures observations and screenshots, and checks a fixed expected result. Saved sequences can be replayed without further model calls.
 
 ## Features
 
@@ -57,7 +57,50 @@ Replay that run against the fixed version, replacing `RUN_DIRECTORY` with the di
 
 The expectation should now pass. Add `--headed` to watch the browser.
 
-## Agent-driven investigations
+## Standalone model investigation
+
+Supply your model and full OpenAI-compatible Chat Completions endpoint.
+Non-loopback providers require an API key in `OPENAI_API_KEY` in your shell;
+validated loopback endpoints can run without a key. A configured key is still
+sent to loopback providers that require authentication.
+
+```powershell
+.\.venv\Scripts\bugrepro.exe investigate `
+  --target http://127.0.0.1:8101 `
+  --report-file examples\live-bug-report.txt `
+  --expectation-file examples\live-expectation.json `
+  --model-endpoint https://api.openai.com/v1/chat/completions `
+  --model "<your-configured-model>"
+```
+
+This starts and closes its own browser service worker. The model chooses one
+validated action per observation, then requests a check of the original frozen
+expectation. Defaults: 20 actions, 25 model calls, 60-second model I/O timeout.
+Results include Markdown/portable HTML evidence and a recipe whenever the
+attempt is complete and error-free. Malformed responses, provider errors and
+budget exhaustion are investigation errors (exit 2).
+
+The bug report, expectation, page observations and action history are sent to
+your configured provider. Use synthetic local test data. Keys are read only
+from the selected environment variable and never recorded. See
+[setup and limitations](docs/USAGE.md#standalone-model-investigation).
+
+You can also use an installed Codex CLI with its own login:
+
+```powershell
+.\.venv\Scripts\bugrepro.exe investigate `
+  --decision-backend codex-cli `
+  --target http://127.0.0.1:8103 `
+  --report-file examples\task-bug-report.txt `
+  --expectation-file examples\task-expectation.json
+```
+
+The adapter requests disabled tools and read-only execution, rejects reported
+tool events, and uses a fresh temporary working directory. These controls are
+not a universal no-tools isolation guarantee across CLI versions or managed
+policies. See [Codex setup and limitations](docs/USAGE.md#codex-cli-decisions).
+
+## External agent investigations
 
 Start the persistent browser service:
 
@@ -67,7 +110,7 @@ Start the persistent browser service:
 
 Give your agent the local target URL, a bug report or requirements, and supported expectations. The CLI exposes commands to start a session, observe the page, execute validated actions, finish, and export a recipe. The browser remains open between commands.
 
-Alan can act as the decision-making agent through its local command tools. Bug Repro itself does not call a model provider. Agent-driven investigations and prewritten recipes use the same executor; recorded replay follows the saved actions without asking an agent to choose them again.
+External agents can use their local command tools. This interface needs no provider key in Bug Repro. All investigation paths and prewritten recipes use the same executor; recorded replay follows the saved actions without asking an agent to choose them again.
 
 See `bugrepro agent --help` and `bugrepro explore --help` for the available commands.
 

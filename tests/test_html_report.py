@@ -31,6 +31,35 @@ EXPECT_FP = "sha256:" + "a" * 64
 RECIPE_FP = "sha256:" + "b" * 64
 
 
+def test_standalone_model_driver_provenance_and_comparison(tmp_path):
+    from bugrepro.report import render_report
+
+    attempt = load_report_run(_make_run(tmp_path, "model", driver="model-agent"), "attempt")
+    replay = load_report_run(_make_run(tmp_path, "replay", driver="recorded-replay"), "fixed")
+    assert compare_fingerprints([attempt, replay])[0]
+    html = render_report_html({"attempt": attempt, "fixed": replay})
+    assert "Original model-driven attempt" in html
+    assert "Configured model endpoint decisions" in html
+    markdown = render_report(attempt.data)
+    assert "The model chose each action" in markdown
+    assert "No model was called in this run" not in markdown
+
+
+def test_codex_driver_provenance_and_comparison(tmp_path):
+    from bugrepro.report import render_report
+
+    attempt = load_report_run(_make_run(tmp_path, "codex", driver="codex-cli"), "attempt")
+    replay = load_report_run(_make_run(tmp_path, "replay", driver="recorded-replay"), "fixed")
+    assert compare_fingerprints([attempt, replay])[0]
+    html = render_report_html({"attempt": attempt, "fixed": replay})
+    assert "Original Codex CLI attempt" in html
+    assert "model identity unverified" in html
+    assert "not universal isolation" in html
+    markdown = render_report(attempt.data)
+    assert "Codex CLI decision backend" in markdown
+    assert "not a universal no-tools isolation guarantee" in markdown
+
+
 def _make_run(
     root: Path,
     name: str,

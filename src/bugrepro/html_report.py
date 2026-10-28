@@ -46,6 +46,8 @@ STATUS_MEANINGS = {
 }
 DRIVER_MEANINGS = {
     "alan-agent": "Live model decisions (session-reported identity).",
+    "model-agent": "Configured model endpoint decisions (user-reported identity).",
+    "codex-cli": "Codex CLI decisions; model identity unverified. Tool-disable controls requested, not universal isolation.",
     "scripted-test": "Pre-written actions. No model decided anything.",
     "recorded-replay": "Deterministic replay of a saved recipe. No model calls.",
 }
@@ -68,6 +70,8 @@ class ReportRun:
         if role == "attempt":
             return {
                 "alan-agent": "Original model-driven attempt",
+                "model-agent": "Original model-driven attempt",
+                "codex-cli": "Original Codex CLI attempt",
                 "scripted-test": "Scripted attempt",
                 "recorded-replay": "Recorded replay",
             }.get(driver, f"Attempt (driver: {driver})")
@@ -77,6 +81,10 @@ class ReportRun:
                 return f"Replay against {target}"
             if driver == "alan-agent":
                 return f"Alan-driven run against {target}"
+            if driver == "model-agent":
+                return f"Model-driven run against {target}"
+            if driver == "codex-cli":
+                return f"Codex CLI run against {target}"
             if driver == "scripted-test":
                 return f"Scripted run against {target}"
             return f"Run against {target} (driver: {driver})"
@@ -258,7 +266,7 @@ def _comparison(runs: dict[str, ReportRun]) -> tuple[bool, list[str]]:
             )
 
     attempt = runs.get("attempt")
-    if attempt is not None and attempt.driver != "alan-agent":
+    if attempt is not None and attempt.driver not in {"alan-agent", "model-agent", "codex-cli"}:
         reasons.append(
             "The original attempt is not labelled as a live agent run "
             f"(driver: {attempt.driver})."
@@ -502,6 +510,12 @@ def _errors_section(run: ReportRun) -> str:
         parts.append(f"<h3>Execution errors</h3><ul>{items}</ul>")
     if not parts:
         parts.append('<p class="muted">No action failures or execution errors.</p>')
+    model_calls = run.data.get("model_calls")
+    if isinstance(model_calls, dict):
+        parts.append(
+            f"<p>Model calls: {_esc(model_calls.get('used', 0))} used / "
+            f"{_esc(model_calls.get('limit', 0))} allowed.</p>"
+        )
     return "".join(parts)
 
 
@@ -748,7 +762,8 @@ def render_report_html(runs: dict[str, ReportRun]) -> str:
       <p><strong>Reading the result.</strong> A failed check means the expected
         result was not observed after this sequence. It is an assertion about the
         page, not proof of the underlying cause.</p>
-      <p>Live agent decisions are labelled <code>alan-agent</code>; scripted actions
+      <p>Live agent decisions are labelled <code>alan-agent</code> or
+        <code>model-agent</code> or <code>codex-cli</code>; scripted actions
         are labelled <code>scripted-test</code>; deterministic replays are labelled
         <code>recorded-replay</code> and make no model calls. Model identity is
         session-reported, not provider-verified.</p>

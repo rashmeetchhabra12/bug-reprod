@@ -2,8 +2,9 @@
 
 Bug Repro supports an external agent such as Alan as the decision maker. The
 agent observes the page and chooses actions; Bug Repro validates, executes,
-records, checks, and replays them. The CLI never calls an LLM, and this project
-does not need a provider API key.
+records, checks, and replays them. The external-agent commands do not call a
+model and do not need a provider API key. For the separate standalone model
+command, see [USAGE.md](USAGE.md#standalone-model-investigation).
 
 The same contract works for any external agent that can run local commands:
 start a persistent session, read the JSON observation, submit one action, then
@@ -171,6 +172,8 @@ The driver label describes how the sequence was produced:
 | Driver | Meaning |
 | --- | --- |
 | `alan-agent` | An external agent chose the actions |
+| `model-agent` | The standalone command used a configured model endpoint |
+| `codex-cli` | The standalone command requested decisions from the installed Codex CLI |
 | `scripted-test` | A pre-written sequence ran |
 | `recorded-replay` | A saved recipe replayed without model decisions |
 

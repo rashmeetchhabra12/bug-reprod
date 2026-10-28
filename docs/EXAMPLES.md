@@ -3,6 +3,13 @@
 Two small fixtures ship with the project. Both run entirely on loopback and use
 synthetic data.
 
+For a standalone model investigation, start either fixture and use
+`bugrepro investigate` with its loopback URL, a report file, a supported
+expectation file, and your configured model endpoint. See the complete
+[setup example](USAGE.md#standalone-model-investigation). The examples below
+also demonstrate scripted replay and the external-agent interface; they do
+not require a model provider key.
+
 ## Account switching
 
 The account fixture has a deliberate stale-profile bug.

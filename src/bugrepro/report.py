@@ -58,7 +58,15 @@ def _recipe_line(run: dict[str, Any]) -> str:
 
 def _provenance(run: dict[str, Any]) -> str:
     driver = run.get("driver")
-    if driver == "alan-agent":
+    if driver == "codex-cli":
+        return (
+            "Codex CLI decision backend. Actions were submitted to the validated "
+            "executor; the expectation was frozen before the first decision. "
+            "The requested model, when supplied, is not a verified model identity. "
+            "CLI tool-disable controls and a read-only sandbox are requested; "
+            "they are not a universal no-tools isolation guarantee."
+        )
+    if driver in {"alan-agent", "model-agent"}:
         model = (run.get("model") or {}).get("id", "unknown")
         return (
             "Live agent investigation. The model chose each action through the "
@@ -138,6 +146,13 @@ def render_report(run: dict[str, Any]) -> str:
             f"- Action budget: {budget.get('used', 0)} used / "
             f"{budget.get('limit', 0)} allowed "
             f"({budget.get('remaining', 0)} remaining)"
+        )
+
+    model_calls = run.get("model_calls")
+    if model_calls:
+        lines.append(
+            f"- Model calls: {_cell(model_calls.get('used', 0))} used / "
+            f"{_cell(model_calls.get('limit', 0))} allowed"
         )
 
     if run.get("bug_report"):

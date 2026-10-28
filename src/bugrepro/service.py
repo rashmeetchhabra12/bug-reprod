@@ -422,6 +422,22 @@ class AgentService:
         self.touch()
         return self._get(session_id).finish()
 
+    def finish_driver(
+        self,
+        session_id: str,
+        *,
+        calls_used: int,
+        calls_limit: int,
+        error: str | None = None,
+    ) -> dict[str, Any]:
+        """Finalize an in-process driver; no provider calls or HTTP surface."""
+        self.touch()
+        investigation = self._get(session_id)
+        investigation.model_calls = {"used": calls_used, "limit": calls_limit}
+        if error and investigation.attempt_status == "active":
+            investigation.record_execution_error("model driver", error)
+        return investigation.finish()
+
     def export_recipe(self, session_id: str) -> dict[str, Any]:
         self.touch()
         return self._get(session_id).export_recipe()
