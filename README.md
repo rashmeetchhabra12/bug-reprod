@@ -87,6 +87,9 @@ from the selected environment variable and never recorded. See
 
 You can also use an installed Codex CLI with its own login:
 
+Windows npm installations are supported by resolving their packaged native
+`codex.exe`; Bug Repro never runs the npm shell wrapper.
+
 ```powershell
 .\.venv\Scripts\bugrepro.exe investigate `
   --decision-backend codex-cli `

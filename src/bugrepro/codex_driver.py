@@ -9,10 +9,12 @@ from __future__ import annotations
 import json
 import math
 import os
+import platform
 import shutil
 import signal
 import subprocess
 import tempfile
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -183,19 +185,52 @@ def _parse_events(stdout: str) -> dict[str, Any]:
         raise ModelError("Codex CLI returned malformed or incomplete structured output.") from None
 
 
+def _resolve_executable() -> str:
+    executable = shutil.which("codex")
+    if executable is None:
+        raise ModelError("Codex CLI is missing; install the official CLI and put it on PATH.")
+    entry = Path(executable)
+    wrapper = entry.suffix.lower() in {".cmd", ".bat", ".ps1"}
+    if sys.platform == "win32" and (wrapper or not entry.suffix):
+        # npm shims sit beside node_modules. Inspect package data only; never
+        # execute/interpret the shim or launch Node to discover its binary.
+        package = entry.parent / "node_modules" / "@openai" / "codex"
+        try:
+            metadata = json.loads((package / "package.json").read_text(encoding="utf-8"))
+            if metadata.get("name") != "@openai/codex":
+                raise ValueError
+        except (OSError, ValueError, AttributeError):
+            raise ModelError("Codex CLI must resolve to its official native executable; no supported npm package was found beside the shell wrapper.") from None
+        targets = {"amd64": ("x64", "x86_64"), "x86_64": ("x64", "x86_64"),
+                   "arm64": ("arm64", "aarch64"), "aarch64": ("arm64", "aarch64")}
+        target = targets.get(platform.machine().lower())
+        if target is None:
+            raise ModelError("Codex CLI npm discovery does not support this Windows architecture.")
+        arch, triple_arch = target
+        relative = Path("vendor") / f"{triple_arch}-pc-windows-msvc" / "bin" / "codex.exe"
+        platform_package = f"codex-win32-{arch}"
+        # Current nested dependency, npm-hoisted dependency, older bundled vendor.
+        candidates = (
+            package / "node_modules" / "@openai" / platform_package / relative,
+            package.parent / platform_package / relative,
+            package / relative,
+        )
+        for candidate in candidates:
+            if candidate.is_file():
+                return str(candidate.resolve())
+        raise ModelError("Codex CLI npm package is missing its native Windows binary; repair the official npm installation locally.")
+    if wrapper:
+        raise ModelError("Codex CLI must resolve to its official native executable, not a shell wrapper.")
+    return executable
+
+
 class CodexClient:
     def __init__(self, *, model: str | None = None, timeout: float = 60) -> None:
         if not math.isfinite(timeout) or not 0 < timeout <= 120:
             raise ModelError("Codex CLI timeout must be finite and at most 120 seconds.")
         if model is not None and (not model.strip() or len(model) > 200):
             raise ModelError("Requested Codex model must contain 1-200 characters.")
-        executable = shutil.which("codex")
-        if executable is None:
-            raise ModelError("Codex CLI is missing; install the official CLI and put it on PATH.")
-        # Never use shell=True to execute an npm wrapper; use an official native binary.
-        if Path(executable).suffix.lower() in {".cmd", ".bat", ".ps1"}:
-            raise ModelError("Codex CLI must resolve to its official native executable, not a shell wrapper.")
-        self.executable = executable
+        self.executable = _resolve_executable()
         self.model = model or "unknown"
         self.model_source = "session-reported" if model else "unavailable"
         self.timeout = timeout

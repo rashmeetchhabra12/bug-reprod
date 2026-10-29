@@ -186,6 +186,58 @@ def test_no_shell_wrappers(monkeypatch):
         CodexClient()
 
 
+@pytest.mark.parametrize("layout", ["nested", "hoisted", "bundled"])
+@pytest.mark.parametrize("machine,arch,triple", [("AMD64", "x64", "x86_64"),
+                                                ("ARM64", "arm64", "aarch64")])
+def test_windows_npm_native_discovery(monkeypatch, tmp_path, layout, machine, arch, triple):
+    prefix = tmp_path / "npm prefix with spaces"
+    package = prefix / "node_modules" / "@openai" / "codex"
+    package.mkdir(parents=True)
+    (package / "package.json").write_text(json.dumps({"name": "@openai/codex"}))
+    roots = {"nested": package / "node_modules" / "@openai" / f"codex-win32-{arch}",
+             "hoisted": package.parent / f"codex-win32-{arch}", "bundled": package}
+    binary = roots[layout] / "vendor" / f"{triple}-pc-windows-msvc" / "bin" / "codex.exe"
+    binary.parent.mkdir(parents=True)
+    binary.write_bytes(b"mock native binary")
+    monkeypatch.setattr(codex_driver.sys, "platform", "win32")
+    monkeypatch.setattr(codex_driver.platform, "machine", lambda: machine)
+    run = Mock(side_effect=AssertionError("Discovery must not launch a subprocess"))
+    monkeypatch.setattr(codex_driver, "_run_cli", run)
+    for shim in ("codex.cmd", "codex.ps1", "codex.bat", "codex"):
+        monkeypatch.setattr(codex_driver.shutil, "which", lambda _, shim=shim: str(prefix / shim))
+        assert CodexClient().executable == str(binary.resolve())
+    run.assert_not_called()
+
+
+@pytest.mark.parametrize("metadata", [None, "not json", '{"name":"other-package"}',
+                                      '{"name":"@openai/codex"}'])
+def test_windows_npm_missing_native_fails_without_launch(monkeypatch, tmp_path, metadata):
+    package = tmp_path / "node_modules" / "@openai" / "codex"
+    package.mkdir(parents=True)
+    if metadata is not None:
+        (package / "package.json").write_text(metadata)
+    # Another architecture, or a directory named codex.exe, is not a usable binary.
+    wrong = package / "vendor" / "aarch64-pc-windows-msvc" / "bin" / "codex.exe"
+    wrong.parent.mkdir(parents=True)
+    wrong.write_bytes(b"wrong architecture")
+    (package / "vendor" / "x86_64-pc-windows-msvc" / "bin" / "codex.exe").mkdir(parents=True)
+    monkeypatch.setattr(codex_driver.sys, "platform", "win32")
+    monkeypatch.setattr(codex_driver.platform, "machine", lambda: "AMD64")
+    monkeypatch.setattr(codex_driver.shutil, "which", lambda _: str(tmp_path / "codex.cmd"))
+    run = Mock()
+    monkeypatch.setattr(codex_driver, "_run_cli", run)
+    with pytest.raises(ModelError, match="native"):
+        CodexClient()
+    run.assert_not_called()
+
+
+def test_windows_explicit_native_is_preserved(monkeypatch, tmp_path):
+    executable = str(tmp_path / "standalone" / "codex.exe")
+    monkeypatch.setattr(codex_driver.sys, "platform", "win32")
+    monkeypatch.setattr(codex_driver.shutil, "which", lambda _: executable)
+    assert CodexClient().executable == executable
+
+
 @pytest.mark.parametrize("timeout", [0, float("nan"), float("inf"), 121])
 def test_finite_timeout_required(timeout):
     with pytest.raises(ModelError, match="finite"):

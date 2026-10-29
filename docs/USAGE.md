@@ -236,8 +236,11 @@ codex login status
 Start the task fixture with `bugrepro serve --app tasks --mode buggy --port 8103`
 in another terminal. No endpoint or Bug Repro API-key configuration is required
 for the Codex backend. Bug Repro never opens Codex credential files, extracts
-login tokens, or manages login. Shell wrappers such as `codex.cmd` are rejected;
-the command must resolve to the official native executable. `--model` optionally
+login tokens, or manages login. On Windows, npm shims such as `codex.cmd`
+are resolved to the installed package's native `codex.exe` (nested or hoisted
+platform dependency, or bundled vendor directory). The wrapper is never run;
+missing native binaries fail with a repair message. No installation path is
+hardcoded. A native executable directly on PATH remains supported. `--model` optionally
 requests a model; when omitted, the CLI selects its default and the recorded
 model identity is `unknown` / `unavailable`. A requested name is unverified
 metadata, not evidence of which model served the request.
