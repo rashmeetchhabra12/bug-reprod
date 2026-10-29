@@ -108,8 +108,17 @@ class ModelClient:
             raise ModelError("Credential appeared in investigation data; refusing to record it.")
 
     def choose(self, context: dict[str, Any]) -> dict[str, Any]:
+        return parse_decision(self._complete(context, SYSTEM_PROMPT))
+
+    def propose_expectation(self, context: dict[str, Any]):
+        from .expectation_proposal import PROPOSAL_PROMPT, parse_proposal
+
+        return parse_proposal(self._complete(context, PROPOSAL_PROMPT))
+
+    def _complete(self, context: dict[str, Any], system_prompt: str) -> Any:
+        self.reject_secret(context)
         body = json.dumps({"model": self.model, "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
         ]}).encode("utf-8")
         connection_type = (http.client.HTTPSConnection if self.parts.scheme == "https"
@@ -144,7 +153,7 @@ class ModelClient:
             self.reject_secret(message["content"])
             decision = json.loads(message["content"])
             self.reject_secret(decision)
-            return parse_decision(decision)
+            return decision
         except ModelError:
             raise
         except (OSError, http.client.HTTPException):

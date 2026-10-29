@@ -133,7 +133,8 @@ failed check.
 ```
 
 The prompts collect a loopback app URL and a multiline bug report or task
-(finish with a line containing only `.`). Choose one existing check:
+(finish with a line containing only `.`). Choose manual expectation entry or
+ask the selected decision backend to propose one check. Only two checks exist:
 
 - **Heading text:** exact heading text and level 1–6 (default 1).
 - **Region item:** the accessible region name and exact list-item text. This
@@ -146,18 +147,42 @@ key: existing `--api-key-env` rules apply. Do not put credentials in the task
 or expectation. Provider prerequisites and Codex isolation limits below still
 apply; the guide does not install or log into providers.
 
+For a proposal, describe the successful result explicitly: for example,
+"Create a page named example and inspect Preview. Its level-1 heading should
+be exactly Example." The backend receives only the URL and description for
+this preparation request, with no browser observation or action. It must
+return one supported check or decline when the description lacks exact text,
+a heading level or a region name. This is a suggestion, not a verified
+requirement: review the proposed kind, text and level/region carefully.
+Ordinary wording such as an item remaining in a named list after reload can
+propose a region-item check, using that list's name and the item text already
+given in the description. You do not need to say "accessible region" or supply
+a heading level for a list item. The proposed region name still needs review;
+the page must expose a matching accessible region when the check runs.
+
+Choose `a`/`accept`, `e`/`edit`, or `r`/`reject`. Edit opens manual entry for
+the revised check. Rejection, an insufficient description, malformed or
+unsupported output, or backend failure offers manual entry (`y`/`yes`) or
+cancellation. Nothing is silently accepted. Fix missing backend configuration
+before retrying if manual entry cannot start an investigation either.
+
 The full canonical expectation, fingerprint, target, backend, action/call
 limits and resource policy appear before `Freeze this expectation and start?`.
 Only `y` or `yes` starts the investigation. Decline, EOF or Ctrl+C cancels with
 exit 2. The existing engine freezes the approved expectation at start before
-any browser action. No model is asked to create, infer or rewrite it. Invalid
-input stops without a browser action; run the guide again to correct it.
+any browser action. A proposal remains unfrozen until accepted and confirmed;
+after freezing, the model cannot replace or rewrite it. Invalid manual input
+stops without a browser action; run the guide again to correct it.
 
 The guide shares `investigate` options for budgets, timeouts, `--headed`,
 `--run-root`, `--label` and `--resource-policy`, and uses the same browser,
 validation, evidence, checks and export rules. Defaults remain 20 actions,
-25 decision calls, 60 seconds per decision and strict external-resource
-blocking. For the existing DokuWiki setup, explicitly select the image policy:
+25 investigation decision calls, 60 seconds per request and strict external-resource
+blocking. Proposal mode makes at most one additional preparation request,
+using the same backend timeout and restrictions. This request can incur provider
+usage even if you reject or cancel; it is separate from `--model-call-limit`
+and the investigation's recorded decision-call count. Manual mode makes no
+proposal request. For the existing DokuWiki setup, explicitly select the image policy:
 
 ```powershell
 .\.venv\Scripts\bugrepro.exe guide `
@@ -178,13 +203,25 @@ the actual exported actions with the same policy and no model calls.
 Exit codes remain 0 passed, 1 failed expectation, 2 error/incomplete/cancelled.
 A failed expectation alone is not a confirmed bug; errors never are bugs.
 
-`guide --json` prints the same final result JSON as `investigate` on stdout;
-prompts, review, progress and the human summary go to stderr. Cancelled and
-invalid input produce a JSON status/error when requested. For fully unattended
-scripts, keep using `investigate` with report and expectation files; that
-command's required flags and JSON output are unchanged. No temporary input
-files are needed for the guide; approved inputs are recorded by the existing
-engine in its new run directory.
+`guide --json` is non-interactive. It requires an explicit target, report file,
+expectation file and backend; supplying the expectation file is your approval
+to freeze that check. It never generates or auto-accepts a proposal and does
+not read stdin. Missing inputs or an invalid expectation produce a JSON error
+and exit 2 without starting an investigation. For example:
+
+```powershell
+.\.venv\Scripts\bugrepro.exe guide --json `
+  --target http://127.0.0.1:8101 `
+  --report-file examples\live-bug-report.txt `
+  --expectation-file examples\live-expectation.json `
+  --decision-backend codex-cli
+```
+
+The final result JSON goes to stdout; progress, the approved expectation and
+the human summary go to stderr. Existing `investigate` required flags and JSON
+output are unchanged. Interactive guide mode needs no input files; approved
+inputs are recorded by the existing engine in a new run directory. Unaccepted
+proposals and provider diagnostics are not saved as investigation artifacts.
 
 ## Standalone model investigation
 

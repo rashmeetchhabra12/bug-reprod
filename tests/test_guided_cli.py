@@ -51,7 +51,7 @@ def fake_engine(monkeypatch, tmp_path):
 ])
 def test_review_precedes_engine_and_uses_only_user_expectation(monkeypatch, fake_engine, capsys, kind, fields, expected):
     calls, result = fake_engine
-    inputs = ['http://127.0.0.1:8110', 'Search and reload.', '.', kind, *fields, '1']
+    inputs = ['http://127.0.0.1:8110', 'Search and reload.', '.', '1', kind, *fields, '1']
     iterator = iter(inputs)
     def read():
         try:
@@ -77,45 +77,54 @@ def test_review_precedes_engine_and_uses_only_user_expectation(monkeypatch, fake
 
 @pytest.mark.parametrize('response', ['n', '', 'anything', None])
 def test_decline_or_eof_starts_nothing(monkeypatch, fake_engine, capsys, response):
-    lines = ['http://localhost:8110', 'Search.', '.', '1', 'Formatting Syntax', '', '1']
+    lines = ['http://localhost:8110', 'Search.', '.', '1', '1', 'Formatting Syntax', '', '1']
     answers(monkeypatch, lines + ([response] if response is not None else []))
-    assert cli.main(['guide', '--json']) == 2
+    assert cli.main(['guide']) == 2
     assert not fake_engine[0]
-    assert json.loads(capsys.readouterr().out)['status'] == 'cancelled'
+    assert 'cancelled' in capsys.readouterr().err
 
 
 @pytest.mark.parametrize('lines', [
     ['https://example.com'],
     ['http://localhost:8110', '.', '1'],
     ['http://localhost:8110', 'Task', '.', 'unsupported'],
-    ['http://localhost:8110', 'Task', '.', '1', 'Heading', '7'],
-    ['http://localhost:8110', 'Task', '.', '1', 'Heading', 'not-a-number'],
-    ['http://localhost:8110', 'Task', '.', '2', '', 'Item'],
-    ['http://localhost:8110', 'Task', '.', '1', 'Heading', '1', 'unsupported'],
+    ['http://localhost:8110', 'Task', '.', '1', '1', 'Heading', '7'],
+    ['http://localhost:8110', 'Task', '.', '1', '1', 'Heading', 'not-a-number'],
+    ['http://localhost:8110', 'Task', '.', '1', '2', '', 'Item'],
+    ['http://localhost:8110', 'Task', '.', '1', '1', 'Heading', '1', 'unsupported'],
 ])
 def test_invalid_input_starts_nothing(monkeypatch, fake_engine, capsys, lines):
     answers(monkeypatch, lines)
-    assert cli.main(['guide', '--json']) == 2
+    assert cli.main(['guide']) == 2
     assert not fake_engine[0]
-    assert json.loads(capsys.readouterr().out)['status'] == 'error'
+    assert capsys.readouterr().err
 
 
 def test_keyboard_interrupt_is_clean_cancellation(monkeypatch, fake_engine, capsys):
     def interrupt():
         raise KeyboardInterrupt
     monkeypatch.setattr('builtins.input', interrupt)
-    assert cli.main(['guide', '--json']) == 2
+    assert cli.main(['guide']) == 2
     assert not fake_engine[0]
-    assert json.loads(capsys.readouterr().out)['status'] == 'cancelled'
+    assert 'cancelled' in capsys.readouterr().err
+
+
+def explicit_json_args(tmp_path, expectation=None):
+    report = tmp_path / 'report.txt'
+    report.write_text('Add a task then reload.', encoding='utf-8')
+    check = tmp_path / 'expectation.json'
+    check.write_text(json.dumps(expectation or {'kind': 'heading_text', 'text': 'Heading', 'level': 1}), encoding='utf-8')
+    return ['guide', '--json', '--target', 'http://localhost:8110', '--report-file', str(report),
+            '--expectation-file', str(check), '--decision-backend', 'codex-cli']
 
 
 @pytest.mark.parametrize('status,code,exported', [('passed', 0, True), ('failed', 1, True), ('error', 2, False)])
-def test_json_stdout_and_honest_summary(monkeypatch, fake_engine, capsys, status, code, exported):
+def test_json_stdout_and_honest_summary(monkeypatch, fake_engine, capsys, tmp_path, status, code, exported):
     calls, result = fake_engine
     result['check']['status'] = status
     result['export']['available'] = exported
-    answers(monkeypatch, ['http://localhost:8110', 'Task', '.', '1', 'Heading', '', '1', 'y'])
-    assert cli.main(['guide', '--json']) == code
+    monkeypatch.setattr('builtins.input', lambda: pytest.fail('JSON mode must not prompt'))
+    assert cli.main(explicit_json_args(tmp_path)) == code
     output = capsys.readouterr()
     assert json.loads(output.out) == result
     assert 'Outcome:' in output.err and 'Report:' in output.err
@@ -125,8 +134,8 @@ def test_json_stdout_and_honest_summary(monkeypatch, fake_engine, capsys, status
 
 
 def test_credentials_not_echoed_during_review(monkeypatch, fake_engine, capsys):
-    answers(monkeypatch, ['http://localhost:8110', KEY, '.', '1', KEY, '', '1', 'y'])
-    assert cli.main(['guide', '--json']) == 2
+    answers(monkeypatch, ['http://localhost:8110', KEY, '.', '1', '1', KEY, '', '1', 'y'])
+    assert cli.main(['guide']) == 2
     output = capsys.readouterr()
     assert KEY not in output.out + output.err
     assert not fake_engine[0]
@@ -136,15 +145,16 @@ def test_credentials_not_echoed_during_review(monkeypatch, fake_engine, capsys):
 def test_guided_subprocess_mock_endpoint_export_and_replay(task_apps, tmp_path, monkeypatch, kind):
     monkeypatch.setenv('GUIDE_TEST_KEY', KEY)
     expected = TASK_EXPECTATION if kind == 'region' else {'kind': 'heading_text', 'text': 'Task list', 'level': 1}
-    fields = ['2', 'Tasks', TASK_EXPECTATION['text']] if kind == 'region' else ['1', 'Task list', '1']
     replies = [{'action': a} for a in TASK_SEQUENCE] + [{'finish': True}]
     with endpoint(replies) as (url, requests):
-        # Select configured endpoint through the actual prompts, not a new provider.
-        input_lines = [task_apps['fixed'], 'Add a task then reload.', '.', *fields, '2', url, 'mock', 'yes']
-        process = subprocess.run([sys.executable, '-m', 'bugrepro', 'guide', '--json',
+        args = explicit_json_args(tmp_path, expected)
+        args[args.index('--target')+1] = task_apps['fixed']
+        args[args.index('--decision-backend')+1] = 'model-endpoint'
+        process = subprocess.run([sys.executable, '-m', 'bugrepro', *args,
+            '--model-endpoint', url, '--model', 'mock',
             '--api-key-env', 'GUIDE_TEST_KEY', '--run-root', str(tmp_path),
             '--action-budget', '4', '--model-call-limit', '5', '--timeout-ms', '500'],
-            input='\n'.join(input_lines)+'\n', capture_output=True, text=True, timeout=45)
+            input='', capture_output=True, text=True, timeout=45)
     assert process.returncode == 0, process.stderr
     result = json.loads(process.stdout)
     assert result['check']['status'] == 'passed'

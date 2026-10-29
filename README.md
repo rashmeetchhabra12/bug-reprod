@@ -67,14 +67,17 @@ Start without preparing input files:
 .\.venv\Scripts\bugrepro.exe guide
 ```
 
-Enter the local app URL, a bug report or task (end with a line containing only
-`.`), a heading or region-item expectation, and your decision backend. Review
-the complete expectation and confirm before the investigation starts. Codex
+Enter the local app URL and a bug report or task (end with a line containing
+only `.`). Enter a heading or region-item expectation manually, or ask your
+selected backend to propose one check. Accept, edit or reject the proposal,
+then review the complete expectation and confirm before the investigation
+starts. Vague descriptions and unusable proposals offer manual entry. Codex
 uses its existing CLI login; endpoint keys stay in environment variables.
 The expectation is frozen before browser actions and cannot be changed by the
 model. The command ends with an outcome, report path and a PowerShell replay
-command when export is allowed. Use `--json` for the final machine-readable
-result; prompts, progress and the summary then go to stderr.
+command when export is allowed. For scripts, `guide --json` is non-interactive
+and requires `--target`, `--report-file`, `--expectation-file` and
+`--decision-backend`. It uses that explicit expectation without a proposal.
 
 Existing input files and scripts can continue using `investigate` below.
 See [guided setup and limits](docs/USAGE.md#guided-investigation).

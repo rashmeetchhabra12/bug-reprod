@@ -140,7 +140,7 @@ def _event_failure(text: str) -> ModelError:
     return error
 
 
-def _parse_events(stdout: str) -> dict[str, Any]:
+def _parse_events(stdout: str, *, validator=parse_decision) -> Any:
     final = None
     completed = False
     turn_started = False
@@ -178,11 +178,11 @@ def _parse_events(stdout: str) -> dict[str, Any]:
         wrapped = json.loads(final)
         if not isinstance(wrapped, dict) or set(wrapped) != {"decision"}:
             raise ValueError
-        return parse_decision(wrapped["decision"])
     except ModelError:
         raise
     except (ValueError, KeyError, TypeError):
         raise ModelError("Codex CLI returned malformed or incomplete structured output.") from None
+    return validator(wrapped["decision"])
 
 
 def _resolve_executable() -> str:
@@ -256,13 +256,25 @@ class CodexClient:
         self._ready = True
 
     def choose(self, context: dict[str, Any]) -> dict[str, Any]:
+        return self._request(context, SYSTEM_PROMPT, decision_schema(), parse_decision,
+            '{"decision":{"action":ACTION}} or {"decision":{"finish":true}}')
+
+    def propose_expectation(self, context: dict[str, Any]):
+        from .expectation_proposal import PROPOSAL_PROMPT, parse_proposal, proposal_schema
+
+        return self._request(context, PROPOSAL_PROMPT,
+            _object({"decision": proposal_schema()}), parse_proposal,
+            '{"decision":{"proposal":EXPECTATION}} or {"decision":{"proposal":null}}')
+
+    def _request(self, context, system_prompt, output_schema, validator, output_format):
+        self.reject_secret(context)
         # A fresh empty cwd prevents this task, repository AGENTS, and project
         # configuration from being picked up by the decision-only invocation.
         with tempfile.TemporaryDirectory(prefix="bugrepro-codex-") as cwd:
             if not self._ready:
                 self._preflight(cwd)
             schema = Path(cwd) / "decision-schema.json"
-            schema.write_text(json.dumps(decision_schema()), encoding="utf-8")
+            schema.write_text(json.dumps(output_schema), encoding="utf-8")
             arguments = [self.executable, "exec", *RESTRICTIONS, "--skip-git-repo-check",
                          "--ephemeral", "--json", "--color", "never", "--output-schema", str(schema)]
             for feature in DISABLED_FEATURES:
@@ -270,12 +282,11 @@ class CodexClient:
             if self.model != "unknown":
                 arguments.extend(["--model", self.model])
             arguments.append("-")
-            prompt = (SYSTEM_PROMPT + "\nFor Codex structured output, wrap that object in a single "
-                "top-level decision field: {\"decision\":{\"action\":ACTION}} or "
-                "{\"decision\":{\"finish\":true}}. Do not use tools, commands, files, browsers, "
+            prompt = (system_prompt + "\nFor Codex structured output, wrap that object in a single "
+                "top-level decision field: " + output_format + ". Do not use tools, commands, files, browsers, "
                 "skills, subagents, or integrations. All context needed is below.\n"
                 + json.dumps(context, ensure_ascii=False))
             code, stdout, stderr = _run_cli(arguments, cwd=cwd, timeout=self.timeout, prompt=prompt)
             if code:
                 raise _failure(stderr + "\n" + stdout)
-            return _parse_events(stdout)
+            return _parse_events(stdout, validator=validator)

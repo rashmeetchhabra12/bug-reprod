@@ -43,7 +43,10 @@ def mocked_cli(monkeypatch):
         if "login" in arguments:
             return 0, "Logged in (output must not be recorded)", ""
         schema = Path(arguments[arguments.index("--output-schema") + 1])
-        assert json.loads(schema.read_text()) == codex_driver.decision_schema()
+        from bugrepro.expectation_proposal import PROPOSAL_PROMPT, proposal_schema
+        expected = (codex_driver._object({"decision": proposal_schema()})
+                    if prompt.startswith(PROPOSAL_PROMPT) else codex_driver.decision_schema())
+        assert json.loads(schema.read_text()) == expected
         reply = replies.pop(0) if replies else (0, events({"finish": True}), "")
         if isinstance(reply, BaseException):
             raise reply

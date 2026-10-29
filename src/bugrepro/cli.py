@@ -434,7 +434,10 @@ def build_parser() -> argparse.ArgumentParser:
     guide_parser = sub.add_parser("guide", help="create and review an investigation interactively")
     _add_investigation_options(guide_parser)
     guide_parser.set_defaults(decision_backend=None, label="guided-investigation")
-    guide_parser.add_argument("--json", action="store_true", help="keep stdout as final JSON; prompts and summary go to stderr")
+    guide_parser.add_argument("--json", action="store_true", help="non-interactive JSON; requires target, report file, expectation file and decision backend")
+    guide_parser.add_argument("--target", help="local app URL (required with --json)")
+    guide_parser.add_argument("--report-file", help="bug report or task file (required with --json)")
+    guide_parser.add_argument("--expectation-file", help="explicit approved expectation file (required with --json)")
     return parser
 
 
@@ -811,51 +814,125 @@ def _powershell_quote(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
+def _manual_guide_expectation():
+    from .expectations import parse_expectation
+    from .model_driver import ModelError
+
+    kind = _ask("Expected result: 1 = heading text, 2 = item in a named region:")
+    if kind == "1":
+        text = _ask("Exact heading text:")
+        level = _ask("Heading level [1]:") or "1"
+        return parse_expectation({"kind": "heading_text", "text": text, "level": _positive_int(level)})
+    if kind == "2":
+        region = _ask("Accessible region name:")
+        text = _ask("Exact list item text:")
+        return parse_expectation({"kind": "region_text_exact", "region": region, "text": text})
+    raise ModelError("Choose 1 for a heading or 2 for a region item.")
+
+
+def _configure_guide_backend(args):
+    from .model_driver import ModelError
+
+    if args.decision_backend is None:
+        backend = _ask("Decision backend: 1 = Codex CLI (existing login), 2 = configured endpoint:")
+        if backend not in {"1", "2"}:
+            raise ModelError("Choose 1 for Codex CLI or 2 for a configured endpoint.")
+        args.decision_backend = "codex-cli" if backend == "1" else "model-endpoint"
+    if args.decision_backend == "model-endpoint":
+        args.model_endpoint = args.model_endpoint or _ask("Full Chat Completions endpoint URL (no credentials):")
+        args.model = args.model or _ask("Configured model name:")
+        print("API keys are read only from the selected environment variable; never enter a key here.", file=sys.stderr)
+
+
+def _proposed_guide_expectation(args, bug_report):
+    """One bounded preparation request, with no browser or investigation state."""
+    from .expectations import parse_expectation
+
+    model_client = driver = None
+    try:
+        model_client, driver = _decision_client(args)
+    except Exception:
+        # Do not echo endpoint values, authentication diagnostics or provider data.
+        pass
+    if model_client is not None:
+        context = {"target": args.target, "bug_report": bug_report}
+        model_client.reject_secret(context)  # fail closed on credentials, not a manual fallback
+        print("Requesting one expectation proposal (no browser actions).", file=sys.stderr, flush=True)
+        try:
+            proposal = model_client.propose_expectation(context)
+            if proposal is not None:
+                model_client.reject_secret(proposal.to_dict())
+                proposal = parse_expectation(proposal.to_dict())
+        except Exception:
+            proposal = None
+            print("Could not generate a supported expectation proposal: the backend failed or returned invalid output.", file=sys.stderr)
+        else:
+            if proposal is None:
+                print("The description does not give enough information for one supported check. Add exact expected text and a heading level or region name.", file=sys.stderr)
+        if proposal is not None:
+            print("\nProposed check (not frozen):", file=sys.stderr)
+            print(json.dumps(proposal.to_dict(), indent=2, ensure_ascii=False), file=sys.stderr)
+            choice = _ask("Accept, edit, or reject this proposal? [a/e/r]:").lower()
+            if choice in {"a", "accept"}:
+                return proposal, model_client, driver
+            if choice in {"e", "edit"}:
+                print("Enter the revised check manually; it will be reviewed before freezing.", file=sys.stderr)
+                return _manual_guide_expectation(), model_client, driver
+            if choice not in {"r", "reject"}:
+                raise EOFError
+            print("Proposal rejected; no expectation is frozen.", file=sys.stderr)
+    else:
+        print("Could not generate a proposal: the decision backend is unavailable or not configured.", file=sys.stderr)
+    if _ask("Enter an expectation manually instead? [y/N]:").lower() not in {"y", "yes"}:
+        raise EOFError
+    return _manual_guide_expectation(), model_client, driver
+
+
 def _cmd_guide(args) -> int:
     from .expectations import ExpectationError, parse_expectation
     from .model_driver import ModelError
     from .safety import TargetError, validate_base_url
 
     try:
-        args.target = validate_base_url(_ask("Local app URL:"))
-        print("Bug report or task (end with a line containing only '.'); do not enter credentials:", file=sys.stderr)
-        lines = []
-        while True:
-            line = input()
-            if line.strip() == ".":
-                break
-            lines.append(line)
-        bug_report = "\n".join(lines)
-        if not bug_report.strip():
-            raise ModelError("A bug report or task is required.")
-        kind = _ask("Expected result: 1 = heading text, 2 = item in a named region:")
-        if kind == "1":
-            text = _ask("Exact heading text:")
-            level = _ask("Heading level [1]:") or "1"
-            expectation = parse_expectation({"kind": "heading_text", "text": text, "level": _positive_int(level)})
-        elif kind == "2":
-            region = _ask("Accessible region name:")
-            text = _ask("Exact list item text:")
-            expectation = parse_expectation({"kind": "region_text_exact", "region": region, "text": text})
+        if args.json and not all((args.target, args.report_file, args.expectation_file, args.decision_backend)):
+            raise ModelError("guide --json is non-interactive and requires --target, --report-file, --expectation-file and --decision-backend. No proposal is auto-accepted.")
+        args.target = validate_base_url(args.target or _ask("Local app URL:"))
+        if args.report_file:
+            bug_report = Path(args.report_file).read_text(encoding="utf-8-sig")
         else:
-            raise ModelError("Choose 1 for a heading or 2 for a region item.")
-        if args.decision_backend is None:
-            backend = _ask("Decision backend: 1 = Codex CLI (existing login), 2 = configured endpoint:")
-            if backend not in {"1", "2"}:
-                raise ModelError("Choose 1 for Codex CLI or 2 for a configured endpoint.")
-            args.decision_backend = "codex-cli" if backend == "1" else "model-endpoint"
-        if args.decision_backend == "model-endpoint":
-            args.model_endpoint = args.model_endpoint or _ask("Full Chat Completions endpoint URL (no credentials):")
-            args.model = args.model or _ask("Configured model name:")
-            print("API keys are read only from the selected environment variable; never enter a key here.", file=sys.stderr)
-        model_client, driver = _decision_client(args)
+            print("Bug report or task (end with a line containing only '.'); do not enter credentials:", file=sys.stderr)
+            lines = []
+            while True:
+                line = input()
+                if line.strip() == ".":
+                    break
+                lines.append(line)
+            bug_report = "\n".join(lines)
+        if not bug_report.strip() or len(bug_report) > 20_000:
+            raise ModelError("A nonempty bug report or task of at most 20000 characters is required.")
+        model_client = driver = None
+        if args.expectation_file:
+            expectation = parse_expectation(_read_json_object(args.expectation_file, "expectation file"))
+        else:
+            method = _ask("Expectation: 1 = enter manually, 2 = ask the backend to propose one check:")
+            if method == "1":
+                expectation = _manual_guide_expectation()
+            elif method == "2":
+                _configure_guide_backend(args)
+                expectation, model_client, driver = _proposed_guide_expectation(args, bug_report)
+            else:
+                raise ModelError("Choose 1 for manual entry or 2 for a proposal.")
+        if model_client is None:
+            if not args.json:
+                _configure_guide_backend(args)
+            model_client, driver = _decision_client(args)
         model_client.reject_secret({"target": args.target, "bug_report": bug_report, "expectation": expectation.to_dict()})
         print("\nReview the complete expectation (the model cannot change it):", file=sys.stderr)
         print(json.dumps(expectation.to_dict(), indent=2, ensure_ascii=False), file=sys.stderr)
         print(f"Fingerprint: {expectation.fingerprint()}\nTarget: {args.target}\nBackend: {args.decision_backend}", file=sys.stderr)
         print(f"Limits: {args.action_budget} actions, {args.model_call_limit} decision calls. Resource policy: {args.resource_policy}.", file=sys.stderr)
         print("All external browser requests stay blocked; results describe this restricted environment.", file=sys.stderr)
-        if _ask("Freeze this expectation and start? [y/N]:").lower() not in {"y", "yes"}:
+        if not args.json and _ask("Freeze this expectation and start? [y/N]:").lower() not in {"y", "yes"}:
             raise EOFError
         print("Expectation approved; freezing it in the investigation before browser actions.", file=sys.stderr, flush=True)
         result = _investigate_request(args, bug_report, expectation.to_dict(), model_client, driver)
@@ -866,7 +943,10 @@ def _cmd_guide(args) -> int:
             print(json.dumps({"status": "cancelled", "error": message}))
         return EXIT_ERROR
     except Exception as exc:
-        message = str(exc) if isinstance(exc, (ModelError, ExpectationError, TargetError, argparse.ArgumentTypeError)) else "Could not complete guided investigation; check the URL, expected result and configuration."
+        if isinstance(exc, ExpectationError):
+            message = "Invalid expectation; use heading_text with text and a level from 1 to 6, or region_text_exact with text and a region name."
+        else:
+            message = str(exc) if isinstance(exc, (ModelError, TargetError, argparse.ArgumentTypeError)) else "Could not complete guided investigation; check the URL, expected result and configuration."
         print(message, file=sys.stderr)
         if args.json:
             print(json.dumps({"status": "error", "error": message}))
