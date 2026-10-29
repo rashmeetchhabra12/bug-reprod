@@ -132,6 +132,28 @@ def _add_state_file_argument(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_investigation_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--decision-backend", choices=("model-endpoint", "codex-cli"),
+        default="model-endpoint", help="decision provider (investigate defaults to model-endpoint; guide prompts)"
+    )
+    parser.add_argument(
+        "--model-endpoint", help="full Chat Completions URL; required for model-endpoint"
+    )
+    parser.add_argument(
+        "--model", help="required for model-endpoint; optional requested Codex model"
+    )
+    parser.add_argument("--api-key-env", default="OPENAI_API_KEY")
+    parser.add_argument("--model-timeout", type=_positive_float, default=60)
+    parser.add_argument("--model-call-limit", type=_positive_int, default=25)
+    parser.add_argument("--action-budget", type=_positive_int, default=20)
+    parser.add_argument("--timeout-ms", type=_positive_int, default=10000)
+    parser.add_argument("--run-root", default="runs")
+    parser.add_argument("--label", default="investigation")
+    parser.add_argument("--headed", action="store_true")
+    _add_resource_policy_argument(parser)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bugrepro",
@@ -402,30 +424,17 @@ def build_parser() -> argparse.ArgumentParser:
         scenario_cmd.add_argument("--scenario", required=True)
 
     investigate_parser = sub.add_parser(
-        "investigate", help="investigate with a configured model endpoint"
+        "investigate", help="investigate from report and expectation files"
     )
     investigate_parser.add_argument("--target", required=True)
     investigate_parser.add_argument("--report-file", required=True)
     investigate_parser.add_argument("--expectation-file", required=True)
-    investigate_parser.add_argument(
-        "--decision-backend", choices=("model-endpoint", "codex-cli"),
-        default="model-endpoint", help="decision provider (default: model-endpoint)"
-    )
-    investigate_parser.add_argument(
-        "--model-endpoint", help="full Chat Completions URL; required for model-endpoint"
-    )
-    investigate_parser.add_argument(
-        "--model", help="required for model-endpoint; optional requested Codex model"
-    )
-    investigate_parser.add_argument("--api-key-env", default="OPENAI_API_KEY")
-    investigate_parser.add_argument("--model-timeout", type=_positive_float, default=60)
-    investigate_parser.add_argument("--model-call-limit", type=_positive_int, default=25)
-    investigate_parser.add_argument("--action-budget", type=_positive_int, default=20)
-    investigate_parser.add_argument("--timeout-ms", type=_positive_int, default=10000)
-    investigate_parser.add_argument("--run-root", default="runs")
-    investigate_parser.add_argument("--label", default="investigation")
-    investigate_parser.add_argument("--headed", action="store_true")
-    _add_resource_policy_argument(investigate_parser)
+    _add_investigation_options(investigate_parser)
+
+    guide_parser = sub.add_parser("guide", help="create and review an investigation interactively")
+    _add_investigation_options(guide_parser)
+    guide_parser.set_defaults(decision_backend=None, label="guided-investigation")
+    guide_parser.add_argument("--json", action="store_true", help="keep stdout as final JSON; prompts and summary go to stderr")
     return parser
 
 
@@ -746,38 +755,41 @@ def _cmd_report(args) -> int:
     return EXIT_PASSED
 
 
+def _decision_client(args):
+    from .model_driver import ModelClient, ModelError
+
+    if args.decision_backend == "codex-cli":
+        from .codex_driver import CodexClient
+
+        if args.model_endpoint:
+            raise ModelError("--model-endpoint cannot be used with --decision-backend codex-cli.")
+        return CodexClient(model=args.model, timeout=args.model_timeout), "codex-cli"
+    if not args.model_endpoint or not args.model:
+        raise ModelError("The model-endpoint backend requires --model-endpoint and --model.")
+    return ModelClient(args.model_endpoint, args.model, args.api_key_env, args.model_timeout), "model-agent"
+
+
+def _investigate_request(args, bug_report, expectation, model_client, driver):
+    from .model_driver import investigate
+
+    return investigate(
+        target=args.target, bug_report=bug_report, expectation=expectation,
+        model_client=model_client, run_root=args.run_root, label=args.label,
+        action_budget=args.action_budget, model_call_limit=args.model_call_limit,
+        timeout_ms=args.timeout_ms, headed=args.headed, driver=driver,
+        resource_policy=args.resource_policy,
+        progress=lambda message: print(message, file=sys.stderr, flush=True),
+    )
+
+
 def _cmd_investigate(args) -> int:
-    from .model_driver import ModelClient, ModelError, investigate
+    from .model_driver import ModelError
 
     try:
-        driver = "model-agent"
-        if args.decision_backend == "codex-cli":
-            from .codex_driver import CodexClient
-
-            if args.model_endpoint:
-                raise ModelError("--model-endpoint cannot be used with --decision-backend codex-cli.")
-            model_client = CodexClient(model=args.model, timeout=args.model_timeout)
-            driver = "codex-cli"
-        else:
-            if not args.model_endpoint or not args.model:
-                raise ModelError("The model-endpoint backend requires --model-endpoint and --model.")
-            model_client = ModelClient(
-                args.model_endpoint, args.model, args.api_key_env, args.model_timeout
-            )
-        result = investigate(
-            target=args.target,
-            bug_report=Path(args.report_file).read_text(encoding="utf-8-sig"),
-            expectation=_read_json_object(args.expectation_file, "expectation file"),
-            model_client=model_client,
-            run_root=args.run_root,
-            label=args.label,
-            action_budget=args.action_budget,
-            model_call_limit=args.model_call_limit,
-            timeout_ms=args.timeout_ms,
-            headed=args.headed,
-            driver=driver,
-            resource_policy=args.resource_policy,
-            progress=lambda message: print(message, file=sys.stderr, flush=True),
+        model_client, driver = _decision_client(args)
+        result = _investigate_request(
+            args, Path(args.report_file).read_text(encoding="utf-8-sig"),
+            _read_json_object(args.expectation_file, "expectation file"), model_client, driver,
         )
     except Exception as exc:  # provider and input diagnostics may contain secrets
         message = (
@@ -790,11 +802,105 @@ def _cmd_investigate(args) -> int:
     return _exit_code((result.get("check") or {}).get("status", "error"))
 
 
+def _ask(prompt: str) -> str:
+    print(prompt, end=" ", file=sys.stderr, flush=True)
+    return input().strip()
+
+
+def _powershell_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _cmd_guide(args) -> int:
+    from .expectations import ExpectationError, parse_expectation
+    from .model_driver import ModelError
+    from .safety import TargetError, validate_base_url
+
+    try:
+        args.target = validate_base_url(_ask("Local app URL:"))
+        print("Bug report or task (end with a line containing only '.'); do not enter credentials:", file=sys.stderr)
+        lines = []
+        while True:
+            line = input()
+            if line.strip() == ".":
+                break
+            lines.append(line)
+        bug_report = "\n".join(lines)
+        if not bug_report.strip():
+            raise ModelError("A bug report or task is required.")
+        kind = _ask("Expected result: 1 = heading text, 2 = item in a named region:")
+        if kind == "1":
+            text = _ask("Exact heading text:")
+            level = _ask("Heading level [1]:") or "1"
+            expectation = parse_expectation({"kind": "heading_text", "text": text, "level": _positive_int(level)})
+        elif kind == "2":
+            region = _ask("Accessible region name:")
+            text = _ask("Exact list item text:")
+            expectation = parse_expectation({"kind": "region_text_exact", "region": region, "text": text})
+        else:
+            raise ModelError("Choose 1 for a heading or 2 for a region item.")
+        if args.decision_backend is None:
+            backend = _ask("Decision backend: 1 = Codex CLI (existing login), 2 = configured endpoint:")
+            if backend not in {"1", "2"}:
+                raise ModelError("Choose 1 for Codex CLI or 2 for a configured endpoint.")
+            args.decision_backend = "codex-cli" if backend == "1" else "model-endpoint"
+        if args.decision_backend == "model-endpoint":
+            args.model_endpoint = args.model_endpoint or _ask("Full Chat Completions endpoint URL (no credentials):")
+            args.model = args.model or _ask("Configured model name:")
+            print("API keys are read only from the selected environment variable; never enter a key here.", file=sys.stderr)
+        model_client, driver = _decision_client(args)
+        model_client.reject_secret({"target": args.target, "bug_report": bug_report, "expectation": expectation.to_dict()})
+        print("\nReview the complete expectation (the model cannot change it):", file=sys.stderr)
+        print(json.dumps(expectation.to_dict(), indent=2, ensure_ascii=False), file=sys.stderr)
+        print(f"Fingerprint: {expectation.fingerprint()}\nTarget: {args.target}\nBackend: {args.decision_backend}", file=sys.stderr)
+        print(f"Limits: {args.action_budget} actions, {args.model_call_limit} decision calls. Resource policy: {args.resource_policy}.", file=sys.stderr)
+        print("All external browser requests stay blocked; results describe this restricted environment.", file=sys.stderr)
+        if _ask("Freeze this expectation and start? [y/N]:").lower() not in {"y", "yes"}:
+            raise EOFError
+        print("Expectation approved; freezing it in the investigation before browser actions.", file=sys.stderr, flush=True)
+        result = _investigate_request(args, bug_report, expectation.to_dict(), model_client, driver)
+    except (EOFError, KeyboardInterrupt):
+        message = "Guided investigation cancelled."
+        print(message, file=sys.stderr)
+        if args.json:
+            print(json.dumps({"status": "cancelled", "error": message}))
+        return EXIT_ERROR
+    except Exception as exc:
+        message = str(exc) if isinstance(exc, (ModelError, ExpectationError, TargetError, argparse.ArgumentTypeError)) else "Could not complete guided investigation; check the URL, expected result and configuration."
+        print(message, file=sys.stderr)
+        if args.json:
+            print(json.dumps({"status": "error", "error": message}))
+        return EXIT_ERROR
+    stream = sys.stderr if args.json else sys.stdout
+    def summary(message):
+        try:
+            model_client.reject_secret(message)
+        except ModelError:
+            message = "Result detail omitted because it contains a credential."
+        print(message, file=stream)
+
+    status = (result.get("check") or {}).get("status", "error")
+    outcome = {"passed": "expectation passed", "failed": "expectation failed (not a confirmed bug)", "error": "investigation error or incomplete attempt"}
+    summary(f"Outcome: {outcome.get(status, outcome['error'])}.")
+    summary(f"Report: {result['html_report']}")
+    if result.get("export", {}).get("available"):
+        recipe = Path(result["run_dir"]) / result["export"]["recipe_path"]
+        command = (f"& {_powershell_quote(sys.executable)} -m bugrepro replay {_powershell_quote(str(recipe))} "
+                   f"--base-url {_powershell_quote(args.target)} --resource-policy {_powershell_quote(args.resource_policy)} "
+                   f"--timeout-ms {args.timeout_ms}")
+        summary(f"Replay (PowerShell, no model calls):\n{command}")
+    if args.json:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    return _exit_code(status)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     if args.command == "investigate":
         return _cmd_investigate(args)
+    if args.command == "guide":
+        return _cmd_guide(args)
 
     if args.command == "serve":
         try:

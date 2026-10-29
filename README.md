@@ -57,6 +57,26 @@ Replay that run against the fixed version, replacing `RUN_DIRECTORY` with the di
 
 The expectation should now pass. Add `--headed` to watch the browser.
 
+## Guided investigation
+
+Start without preparing input files:
+
+```powershell
+.\.venv\Scripts\bugrepro.exe guide
+```
+
+Enter the local app URL, a bug report or task (end with a line containing only
+`.`), a heading or region-item expectation, and your decision backend. Review
+the complete expectation and confirm before the investigation starts. Codex
+uses its existing CLI login; endpoint keys stay in environment variables.
+The expectation is frozen before browser actions and cannot be changed by the
+model. The command ends with an outcome, report path and a PowerShell replay
+command when export is allowed. Use `--json` for the final machine-readable
+result; prompts, progress and the summary then go to stderr.
+
+Existing input files and scripts can continue using `investigate` below.
+See [guided setup and limits](docs/USAGE.md#guided-investigation).
+
 ## Standalone model investigation
 
 Supply your model and full OpenAI-compatible Chat Completions endpoint.

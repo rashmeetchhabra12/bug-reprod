@@ -126,6 +126,66 @@ Checks wait for the expected content up to the operation timeout. A missing
 container is an execution error; a present container with wrong content is a
 failed check.
 
+## Guided investigation
+
+```powershell
+.\.venv\Scripts\bugrepro.exe guide
+```
+
+The prompts collect a loopback app URL and a multiline bug report or task
+(finish with a line containing only `.`). Choose one existing check:
+
+- **Heading text:** exact heading text and level 1–6 (default 1).
+- **Region item:** the accessible region name and exact list-item text. This
+  checks a list item in that region, not arbitrary text anywhere on the page.
+
+Choose Codex CLI using its own existing login, or the configured endpoint
+backend. Endpoint setup asks for the full Chat Completions URL and model name
+unless supplied with `--model-endpoint` / `--model`. It never asks for an API
+key: existing `--api-key-env` rules apply. Do not put credentials in the task
+or expectation. Provider prerequisites and Codex isolation limits below still
+apply; the guide does not install or log into providers.
+
+The full canonical expectation, fingerprint, target, backend, action/call
+limits and resource policy appear before `Freeze this expectation and start?`.
+Only `y` or `yes` starts the investigation. Decline, EOF or Ctrl+C cancels with
+exit 2. The existing engine freezes the approved expectation at start before
+any browser action. No model is asked to create, infer or rewrite it. Invalid
+input stops without a browser action; run the guide again to correct it.
+
+The guide shares `investigate` options for budgets, timeouts, `--headed`,
+`--run-root`, `--label` and `--resource-policy`, and uses the same browser,
+validation, evidence, checks and export rules. Defaults remain 20 actions,
+25 decision calls, 60 seconds per decision and strict external-resource
+blocking. For the existing DokuWiki setup, explicitly select the image policy:
+
+```powershell
+.\.venv\Scripts\bugrepro.exe guide `
+  --resource-policy block-external-images `
+  --action-budget 12 --model-call-limit 16 --model-timeout 90 `
+  --timeout-ms 10000 --label guided-dokuwiki --headed
+```
+
+Enter `http://127.0.0.1:8110`, the search/open/reload task, and a level-1
+`Formatting Syntax` heading expectation. Select Codex CLI and review before
+confirming. All external requests remain blocked; results describe that
+restricted environment. A passing heading alone does not prove the requested
+workflow: inspect recorded actions, observations and screenshots.
+
+The default final output is a short outcome and HTML report path, followed
+by a quoted PowerShell replay command if a recipe was exported. It replays
+the actual exported actions with the same policy and no model calls.
+Exit codes remain 0 passed, 1 failed expectation, 2 error/incomplete/cancelled.
+A failed expectation alone is not a confirmed bug; errors never are bugs.
+
+`guide --json` prints the same final result JSON as `investigate` on stdout;
+prompts, review, progress and the human summary go to stderr. Cancelled and
+invalid input produce a JSON status/error when requested. For fully unattended
+scripts, keep using `investigate` with report and expectation files; that
+command's required flags and JSON output are unchanged. No temporary input
+files are needed for the guide; approved inputs are recorded by the existing
+engine in its new run directory.
+
 ## Standalone model investigation
 
 For non-loopback providers, set `OPENAI_API_KEY` in your process environment
