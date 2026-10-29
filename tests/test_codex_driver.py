@@ -325,6 +325,12 @@ def test_codex_cli_configuration_without_endpoint(mocked_cli, task_apps, tmp_pat
     assert main(["investigate", "--decision-backend", "codex-cli", "--target", task_apps["buggy"],
         "--report-file", str(report), "--expectation-file", str(expectation),
         "--run-root", str(tmp_path), "--timeout-ms", "500"]) == 2  # finish with no actions
-    result = json.loads(capsys.readouterr().out)
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
     assert result["driver"] == "codex-cli"
     assert result["model"]["source"] == "unavailable"
+    assert captured.err.splitlines() == [
+        "Waiting for decision (call 1/25).", "Final check: error.",
+        f"Report: {result['html_report']}",
+    ]
+    assert "Logged in" not in captured.err and "not evidence" not in captured.err

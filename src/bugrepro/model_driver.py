@@ -8,12 +8,12 @@ import math
 import os
 import time
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 from urllib.parse import urlsplit
 
 from .agent_client import default_state_path
 from .html_report import load_report_run, write_report_html
-from .recipe import ROLE_NAMES, parse_action
+from .recipe import ACTION_TYPES, ROLE_NAMES, parse_action
 from .safety import TargetError, is_loopback_url, validate_base_url
 from .service import AgentService, ServiceConfig
 
@@ -165,8 +165,19 @@ def investigate(
     headed: bool = False,
     driver: str = "model-agent",
     resource_policy: str = "strict",
+    progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Run one isolated service worker; replay remains completely independent."""
+    def notify(message: str) -> None:
+        if progress is not None:
+            try:
+                model_client.reject_secret(message)
+                progress(message)
+            except Exception:
+                # Terminal output (including a closed stderr pipe) must not
+                # change the investigation or prevent cleanup and export.
+                pass
+
     validate_base_url(target)
     if not 1 <= model_call_limit <= 100:
         raise ModelError("Model call limit must be between 1 and 100.")
@@ -190,6 +201,7 @@ def investigate(
                 if calls >= model_call_limit:
                     raise ModelError("Model call budget exhausted before finish.")
                 calls += 1
+                notify(f"Waiting for decision (call {calls}/{model_call_limit}).")
                 decision = model_client.choose({"bug_report": bug_report,
                     "expectation": expectation, "target": target, "latest": latest,
                     "executed_actions": history,
@@ -197,7 +209,17 @@ def investigate(
                 if decision.get("finish") is True:
                     break
                 action = decision["action"]
-                latest = service.submit(lambda: service.act(session_id, {"action": action}))
+                number = len(history) + 1
+                kind = action.get("type")
+                kind = kind if kind in ACTION_TYPES else "unsupported"
+                notify(f"Executing action {number}: {kind}.")
+                try:
+                    latest = service.submit(lambda: service.act(session_id, {"action": action}))
+                except (Exception, KeyboardInterrupt):
+                    notify(f"Action {number} failed.")
+                    raise
+                succeeded = latest["status"] == "ok" and latest["attempt_status"] == "active"
+                notify(f"Action {number} {'succeeded' if succeeded else 'failed'}.")
                 history.append(action)
                 if latest["status"] != "ok" or latest["attempt_status"] != "active":
                     break
@@ -213,6 +235,10 @@ def investigate(
         run_dir = Path(result["run_dir"])
         result["html_report"] = str(write_report_html(run_dir / "report.html", {
             "attempt": load_report_run(run_dir, "attempt")}))
+        check_status = (result.get("check") or {}).get("status")
+        check_status = check_status if check_status in {"passed", "failed", "error"} else "error"
+        notify(f"Final check: {check_status}.")
+        notify(f"Report: {result['html_report']}")
         return result
     finally:
         service.submit(service.begin_shutdown)

@@ -201,6 +201,13 @@ the result: the existing checker evaluates it only on finish. Exit codes are
 records an observation, not a verified root cause or replay-confirmed finding.
 The model may stop too early or choose an irrelevant sequence; review evidence.
 
+During investigation, concise progress goes to stderr: decision-call counts,
+action numbers/types and success/failure, then the final check status and HTML
+report path. Messages are flushed immediately, without prompts, observations,
+locator names, fill values, model reasoning or provider diagnostics. Stdout
+remains only the final JSON, so scripts can capture it separately by appending
+`1> result.json 2> progress.log` to their normal PowerShell command.
+
 The command prints JSON with the result and paths to `report.md`, a
 self-contained `report.html`, and `recipe.json` when existing export rules
 allow it. Error-free completed passed and failed attempts can be exported;

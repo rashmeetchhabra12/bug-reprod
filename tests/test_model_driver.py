@@ -145,7 +145,7 @@ def assert_secret_absent(root):
 
 
 @pytest.mark.parametrize("authenticated", [False, True])
-def test_mocked_end_to_end_export_replay(task_apps, tmp_path, monkeypatch, authenticated):
+def test_mocked_end_to_end_export_replay(task_apps, tmp_path, monkeypatch, authenticated, capsys):
     if not authenticated:
         monkeypatch.delenv("BUGREPRO_TEST_KEY")
     replies = [{"action": action} for action in TASK_SEQUENCE] + [{"finish": True}]
@@ -171,6 +171,8 @@ def test_mocked_end_to_end_export_replay(task_apps, tmp_path, monkeypatch, authe
     expected_auth = "Bearer " + KEY if authenticated else None
     assert all(req[0] == "/v1/chat/completions" and req[1] == expected_auth for req in requests)
     assert_secret_absent(tmp_path)
+    captured = capsys.readouterr()
+    assert captured.out == captured.err == ""  # library/replay stay quiet
 
 
 @pytest.mark.parametrize("reply", ["not json", [], {"action": {"type": "eval", "code": "1"}},
@@ -310,3 +312,66 @@ def test_standalone_cli(task_apps, tmp_path, monkeypatch, mode, code, authentica
     assert KEY not in process.stdout + process.stderr
     # CLI driver describes the model protocol. The responses here are scripted mocks.
     assert json.loads(process.stdout)["driver"] == "model-agent"
+    result = json.loads(process.stdout)
+    lines = []
+    for index, action in enumerate(TASK_SEQUENCE, 1):
+        lines.extend([f"Waiting for decision (call {index}/25).",
+                      f"Executing action {index}: {action['type']}.",
+                      f"Action {index} succeeded."])
+    lines.extend(["Waiting for decision (call 5/25).",
+                  f"Final check: {'passed' if code == 0 else 'failed'}.",
+                  f"Report: {result['html_report']}"])
+    assert process.stderr.splitlines() == lines
+
+
+@pytest.mark.parametrize("outcome", ["passed", "action-error", "provider-error", "budget-error"])
+def test_cli_progress_omits_sensitive_data(task_apps, tmp_path, capsys, outcome):
+    private_fill = "private-fill-value-987"
+    private_locator = "private-missing-control-876"
+    private_report = "private-bug-report-765"
+    private_model = "private-model-name-654"
+    report = tmp_path / "bug.txt"
+    report.write_text(private_report, encoding="utf-8")
+    expectation = tmp_path / "expectation.json"
+    expectation.write_text(json.dumps(dict(TASK_EXPECTATION, text=private_fill)), encoding="utf-8")
+    sequence = [dict(a) for a in TASK_SEQUENCE]
+    sequence[1] = dict(sequence[1], text=private_fill)
+    if outcome == "action-error":
+        sequence[2] = {"type": "click", "locator": {"role": "button", "name": private_locator}}
+    replies = [{"action": a} for a in sequence] + [{"finish": True}]
+    if outcome == "provider-error":
+        replies = [KEY]  # raw provider diagnostics must never enter progress
+    with endpoint(replies, status=429 if outcome == "provider-error" else 200) as (url, requests):
+        code = main(["investigate", "--target", task_apps["fixed"],
+            "--report-file", str(report), "--expectation-file", str(expectation),
+            "--model-endpoint", url, "--model", private_model,
+            "--api-key-env", "BUGREPRO_TEST_KEY", "--run-root", str(tmp_path / "runs"),
+            "--timeout-ms", "500", "--model-call-limit", "1" if outcome == "budget-error" else "25"])
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)  # stdout is exactly one JSON document
+    assert code == (0 if outcome == "passed" else 2)
+    assert result["check"]["status"] == ("passed" if outcome == "passed" else "error")
+    for value in (KEY, private_fill, private_locator, private_report, private_model,
+                  "Task title", "Add task", "Tasks", task_apps["fixed"], url,
+                  '"observation"', '"messages"'):
+        assert value not in captured.err
+    assert "Waiting for decision (call 1/" in captured.err
+    assert f"Final check: {result['check']['status']}." in captured.err
+    assert f"Report: {result['html_report']}" in captured.err
+    if outcome == "action-error":
+        assert "Executing action 3: click.\nAction 3 failed." in captured.err
+        assert "call 4/" not in captured.err
+    if outcome in {"budget-error", "provider-error"}:
+        assert len(requests) == 1 and "call 2/" not in captured.err
+    assert result["export"]["available"] == (outcome == "passed")
+
+
+def test_progress_sink_failure_does_not_change_investigation(task_apps, tmp_path):
+    def closed_terminal(message):
+        raise OSError("closed stderr")
+    with endpoint([{"action": TASK_SEQUENCE[0]}, {"finish": True}]) as (url, requests):
+        result = run_mock(url, task_apps["fixed"], tmp_path, progress=closed_terminal)
+    assert result["check"]["status"] == "failed"
+    assert result["execution_error_count"] == 0
+    assert result["export"]["available"]
+    assert result["model_calls"]["used"] == len(requests) == 2

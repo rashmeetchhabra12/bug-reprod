@@ -80,6 +80,10 @@ Results include Markdown/portable HTML evidence and a recipe whenever the
 attempt is complete and error-free. Malformed responses, provider errors and
 budget exhaustion are investigation errors (exit 2).
 
+Investigation progress is printed to stderr; stdout remains the final JSON
+result. Progress shows decision-call counts, action types and outcomes, and
+the final check and report path, without prompts or page content.
+
 The bug report, expectation, page observations and action history are sent to
 your configured provider. Use synthetic local test data. Keys are read only
 from the selected environment variable and never recorded. See

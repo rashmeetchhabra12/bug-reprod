@@ -777,6 +777,7 @@ def _cmd_investigate(args) -> int:
             headed=args.headed,
             driver=driver,
             resource_policy=args.resource_policy,
+            progress=lambda message: print(message, file=sys.stderr, flush=True),
         )
     except Exception as exc:  # provider and input diagnostics may contain secrets
         message = (
