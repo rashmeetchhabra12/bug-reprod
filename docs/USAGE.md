@@ -294,6 +294,52 @@ checks and do not establish live authentication or model quality.
 See official [non-interactive execution](https://learn.chatgpt.com/docs/non-interactive-mode)
 and [configuration controls](https://learn.chatgpt.com/docs/config-file/config-reference).
 
+### Browser resource policies
+
+The default `--resource-policy strict` blocks every external request and treats
+any blocked resource as an execution error. An external image can therefore
+make an otherwise rendered page inconclusive, including on a later action if
+the image request arrived asynchronously.
+
+The explicit `block-external-images` policy still aborts every external request
+using CDP Fetch before network. Only requests Chromium classifies as `Image`
+are recorded as nonfatal blocked resources. The decision is based on resource
+type, never a `.gif`/`.png` suffix or an allowlist. External scripts, styles,
+frames, top-level navigation, fetches and unknown resource types remain fatal;
+interception failures, timeouts, locator failures and browser crashes are not
+suppressed. Service workers remain disabled.
+
+```powershell
+.\.venv\Scripts\bugrepro.exe investigate `
+  --decision-backend codex-cli `
+  --target http://127.0.0.1:8110 `
+  --report-file request.txt --expectation-file expectation.json `
+  --resource-policy block-external-images
+
+.\.venv\Scripts\bugrepro.exe replay runs\RUN_DIRECTORY `
+  --base-url http://127.0.0.1:8110 `
+  --resource-policy block-external-images
+```
+
+The same option is available on `run`. It is fixed at investigation start,
+separate from the frozen expectation and action schema; actions cannot change
+it. Recipes keep their original action/expectation format. Replay defaults to
+`strict`, so pass the original policy explicitly when reproducing the same
+restricted environment. The service start API accepts `resource_policy` with
+the same two validated values; existing sessions and exploration stay strict
+unless a supported start path explicitly selects another policy.
+
+`run.json`, Markdown and HTML reports record `resource_policy`,
+`blocked_resources` (sanitized URL, Chromium resource type, main-document flag,
+timestamp, blocked disposition, fatal status), and any `request_guard_errors`.
+URLs omit credentials, query strings and fragments. Comparison reports flag
+differing policies even when recipe and expectation fingerprints match.
+
+Results describe the app **under this restricted environment**, with external
+images missing. A passing heading check does not show that the full page works
+with network access. Blocked images remain visible in evidence and reports;
+they are never silently allowed or treated as proof of an application bug.
+
 ## Persistent agent service
 
 The service owns Chromium and keeps one browser context per investigation. It

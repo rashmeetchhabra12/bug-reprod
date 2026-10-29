@@ -164,6 +164,7 @@ def investigate(
     timeout_ms: int = 10000,
     headed: bool = False,
     driver: str = "model-agent",
+    resource_policy: str = "strict",
 ) -> dict[str, Any]:
     """Run one isolated service worker; replay remains completely independent."""
     validate_base_url(target)
@@ -171,7 +172,8 @@ def investigate(
         raise ModelError("Model call limit must be between 1 and 100.")
     payload = {"target": target, "bug_report": bug_report, "expectation": expectation,
                "driver": driver, "model": {"id": model_client.model, "source": model_client.model_source},
-               "label": label, "action_budget": action_budget, "timeout_ms": timeout_ms}
+               "label": label, "action_budget": action_budget, "timeout_ms": timeout_ms,
+               "resource_policy": resource_policy}
     model_client.reject_secret(payload)
     service = AgentService(ServiceConfig(state_file=default_state_path(),
         run_root=Path(run_root), headless=not headed, session_idle_timeout=300))

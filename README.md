@@ -130,6 +130,14 @@ Exit codes: `0` means the expectation passed, `1` means it failed, and `2` means
 
 Currently supports local loopback URLs and Chromium. Actions include navigation, click, fill, reload, observation, and screenshots. Expectations check heading text or an exact list item within an accessible region. Service workers are disabled. Exploration is limited to three scenarios and sixty actions, including confirmations.
 
+All external browser requests are blocked. The default resource policy is
+`strict`, which makes every blocked resource an execution error. Explicitly
+select `--resource-policy block-external-images` on `investigate`, `run`, or
+`replay` to keep external images blocked and recorded without making only
+those image blocks fatal. Scripts, frames, navigation, and unrelated errors
+remain fatal. Reports show the policy and blocked resources; results describe
+the app in that restricted environment. Use the same explicit policy for a replay.
+
 Bug Repro records and checks browser behaviour; it does not automatically repair application code. A passing scenario covers only the expectation that was tested.
 
 ## Development

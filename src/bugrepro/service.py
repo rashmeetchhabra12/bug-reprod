@@ -63,6 +63,7 @@ ALLOWED_START_FIELDS = frozenset(
         "label",
         "action_budget",
         "timeout_ms",
+        "resource_policy",
     }
 )
 ALLOWED_EXPLORATION_START_FIELDS = frozenset(
@@ -344,6 +345,13 @@ class AgentService:
         if not (500 <= timeout_ms <= 60_000):
             raise InvestigationError("timeout_ms must be between 500 and 60000.")
 
+        from .browser import validate_resource_policy
+
+        try:
+            resource_policy = validate_resource_policy(payload.get("resource_policy", "strict"))
+        except ValueError as exc:
+            raise InvestigationError(str(exc)) from exc
+
         host = self._ensure_host()
         session_id = secrets.token_urlsafe(12)
         while session_id in self.sessions:  # pragma: no cover - collision is unlikely
@@ -362,6 +370,7 @@ class AgentService:
             label=label,
             headless=self.config.headless,
             host=host,
+            resource_policy=resource_policy,
         )
         self.sessions[session_id] = investigation
         return {
@@ -381,6 +390,7 @@ class AgentService:
                 "frozen_at": investigation.started_at,
             },
             "budget": investigation.budget(),
+            **investigation.session.network_record(),
             "evidence": [],
         }
 

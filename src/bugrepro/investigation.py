@@ -152,12 +152,14 @@ class Investigation:
         allowed_actions: frozenset[str] | None = None,
         allowed_fill_texts: frozenset[str] | None = None,
         invocation: str = "agent",
+        resource_policy: str = "strict",
     ) -> "Investigation":
         session = BrowserSession(
             base_url=base_url,
             headless=headless,
             timeout_ms=timeout_ms,
             host=host,
+            resource_policy=resource_policy,
         )
         try:
             session.__enter__()
@@ -291,10 +293,10 @@ class Investigation:
         try:
             observation = self.session.perform(action)
         except (PlaywrightTimeoutError, PlaywrightError) as exc:
-            if self.session.blocked_requests:
+            if self.session.fatal_blocked_requests:
                 message = (
                     "Blocked non-loopback request(s): "
-                    + ", ".join(self.session.blocked_requests[:3])
+                    + ", ".join(self.session.fatal_blocked_requests[:3])
                 )
                 self.execution_errors.append(
                     {"stage": f"action {index} ({action.type})", "error": message}
@@ -346,10 +348,10 @@ class Investigation:
                 observation=failure_observation or self.last_observation,
             )
         except Exception as exc:  # noqa: BLE001 - recorded, never fatal to the service
-            if self.session.blocked_requests:
+            if self.session.fatal_blocked_requests:
                 message = (
                     "Blocked non-loopback request(s): "
-                    + ", ".join(self.session.blocked_requests[:3])
+                    + ", ".join(self.session.fatal_blocked_requests[:3])
                 )
             else:
                 message = f"{type(exc).__name__}: {exc}"
@@ -433,6 +435,7 @@ class Investigation:
     ) -> dict[str, Any]:
         return {
             "status": status,
+            **self.session.network_record(),
             "session_id": self.session_id,
             "attempt_status": self.attempt_status,
             "action_result": self.last_result,
@@ -461,6 +464,7 @@ class Investigation:
             "session_id": self.session_id,
             "attempt_status": self.attempt_status,
             "observation": observation.to_dict(),
+            **self.session.network_record(),
             "latest_result": self.last_result,
             "budget": self.budget(),
             "evidence": self.evidence_list(),
@@ -468,6 +472,7 @@ class Investigation:
 
     def status(self) -> dict[str, Any]:
         return {
+            **self.session.network_record(),
             "status": "ok",
             "session_id": self.session_id,
             "run_id": self.run_dir.name,
@@ -544,6 +549,11 @@ class Investigation:
         self.finished_at = _iso()
         self.attempt_status = "finished"
 
+        try:
+            self.session.check_network_policy()
+        except Exception as exc:
+            self.execution_errors.append({"stage": "request guard at finish", "error": str(exc)})
+
         if self.budget_exhausted:
             self.check = self._error_check(
                 "Action budget was exhausted before finish. The attempt is "
@@ -566,6 +576,7 @@ class Investigation:
                 self.check = evaluate_expectation(
                     self.session.page, self.expectation, self.timeout_ms
                 )
+                self.session.check_network_policy()
             except Exception as exc:  # noqa: BLE001 - must stay explicit
                 self.execution_errors.append(
                     {
@@ -583,6 +594,7 @@ class Investigation:
 
     def _finish_response(self) -> dict[str, Any]:
         return {
+            **self.session.network_record(),
             "status": "ok",
             "session_id": self.session_id,
             "run_id": self.run_dir.name,
@@ -693,6 +705,7 @@ class Investigation:
     def _run_document(self) -> dict[str, Any]:
         check = self.check or self._error_check("The attempt has not finished.")
         document: dict[str, Any] = {
+            **self.session.network_record(),
             "schema_version": SCHEMA_VERSION,
             "run_id": self.run_dir.name,
             "invocation": self.invocation,

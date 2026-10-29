@@ -21,7 +21,7 @@ from typing import Any
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
-from .browser import BrowserSession, BrowserStartupError, Observation, PlaywrightHost
+from .browser import BrowserSession, BrowserStartupError, Observation, PlaywrightHost, validate_resource_policy
 from .check import CheckResult, evaluate_expectation
 from .recipe import Recipe, load_recipe, recipe_fingerprint, write_recipe
 from .report import render_report
@@ -141,14 +141,14 @@ def _run_actions(
         try:
             observation: Observation = session.perform(action)
         except (PlaywrightTimeoutError, PlaywrightError) as exc:
-            if session.blocked_requests:
+            if session.fatal_blocked_requests:
                 execution_errors.append(
                     {
                         "stage": f"action {index} ({action.type})",
                         "error": (
                             "Blocked non-loopback request(s) during the "
                             "action: "
-                            + ", ".join(session.blocked_requests[:3])
+                            + ", ".join(session.fatal_blocked_requests[:3])
                         ),
                     }
                 )
@@ -221,10 +221,13 @@ def _run_actions(
         )
 
     if not action_failures and not execution_errors:
-        check = evaluate_expectation(
-            session.page, recipe.expectation, timeout_ms
-        )
-    else:
+        try:
+            session.check_network_policy()
+            check = evaluate_expectation(session.page, recipe.expectation, timeout_ms)
+            session.check_network_policy()
+        except Exception as exc:
+            execution_errors.append({"stage": "final check", "error": f"{type(exc).__name__}: {exc}"})
+    if action_failures or execution_errors:
         check = CheckResult(
             status="error",
             expected=recipe.expectation.text,
@@ -256,9 +259,11 @@ def _finalize_run(
     check: CheckResult,
     driver: str,
     invocation: str,
+    network: dict[str, Any],
 ) -> RunResult:
     finished_at = _iso(_utc_now())
     run_document: dict[str, Any] = {
+        **network,
         "schema_version": SCHEMA_VERSION,
         "run_id": run_dir.name,
         "invocation": invocation,
@@ -356,10 +361,12 @@ def execute_recipe(
     label: str | None = None,
     headless: bool = True,
     timeout_ms: int = 10_000,
+    resource_policy: str = "strict",
 ) -> RunResult:
     """Run all actions in a new browser, then evaluate the expectation once."""
     if timeout_ms <= 0:
         raise ValueError("timeout_ms must be positive.")
+    resource_policy = validate_resource_policy(resource_policy)
     (
         base,
         actual_driver,
@@ -389,11 +396,13 @@ def execute_recipe(
         duration_ms=0,
     )
 
+    session = None
     try:
         with BrowserSession(
             base_url=base,
             headless=headless,
             timeout_ms=timeout_ms,
+            resource_policy=resource_policy,
         ) as session:
             records, action_failures, execution_errors, check = _run_actions(
                 session=session,
@@ -446,6 +455,9 @@ def execute_recipe(
         check=check,
         driver=actual_driver,
         invocation=invocation,
+        network=session.network_record() if session else {
+            "resource_policy": resource_policy, "blocked_resources": [], "request_guard_errors": []
+        },
     )
 
 
@@ -459,6 +471,7 @@ def execute_recipe_with_host(
     driver: str = "recorded-replay",
     label: str | None = None,
     timeout_ms: int = 10_000,
+    resource_policy: str = "strict",
 ) -> RunResult:
     """Replay a recipe in a fresh context on an existing service-owned browser.
 
@@ -467,6 +480,7 @@ def execute_recipe_with_host(
     """
     if timeout_ms <= 0:
         raise ValueError("timeout_ms must be positive.")
+    resource_policy = validate_resource_policy(resource_policy)
     if driver != "recorded-replay":
         raise ValueError("A service-hosted replay must use recorded-replay.")
     (
@@ -497,11 +511,13 @@ def execute_recipe_with_host(
         reason="The check was not evaluated.",
         duration_ms=0,
     )
+    session = None
     try:
         with BrowserSession(
             base_url=base,
             timeout_ms=timeout_ms,
             host=host,
+            resource_policy=resource_policy,
         ) as session:
             records, action_failures, execution_errors, check = _run_actions(
                 session=session,
@@ -554,6 +570,9 @@ def execute_recipe_with_host(
         check=check,
         driver=actual_driver,
         invocation=invocation,
+        network=session.network_record() if session else {
+            "resource_policy": resource_policy, "blocked_resources": [], "request_guard_errors": []
+        },
     )
 
 

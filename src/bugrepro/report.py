@@ -139,6 +139,25 @@ def render_report(run: dict[str, Any]) -> str:
     lines.append(f"- Started: {_cell(run['started_at'])}")
     lines.append(f"- Finished: {_cell(run.get('finished_at') or 'not finished')}")
     lines.append(f"- Recipe: {_recipe_line(run)}")
+    lines.append(f"- Resource policy: {_cell(run.get('resource_policy', 'strict'))}")
+    lines.append(
+        "- Restricted environment: all external requests are blocked. Results "
+        "describe this restricted environment; blocked images may be missing."
+    )
+    resources = run.get("blocked_resources") or []
+    if resources:
+        lines.extend(["", "## Blocked resources", "",
+                      "| Type | URL (credentials/query omitted) | Fatal |",
+                      "| --- | --- | --- |"])
+        for resource in resources:
+            lines.append(
+                f"| {_cell(resource.get('resource_type'))} | {_cell(resource.get('url'), 320)} "
+                f"| {_cell(resource.get('fatal'))} |"
+            )
+    else:
+        lines.append("- Blocked resources recorded: none.")
+    for guard_error in run.get("request_guard_errors") or []:
+        lines.append(f"- Request guard error: {_cell(guard_error)}")
 
     budget = run.get("budget")
     if budget:

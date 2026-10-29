@@ -81,6 +81,7 @@ def _positive_float(value: str) -> float:
 
 
 def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
+    _add_resource_policy_argument(parser)
     parser.add_argument(
         "recipe",
         help="recipe JSON file, or a previous run directory containing recipe.json",
@@ -110,6 +111,13 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
         "--headed",
         action="store_true",
         help="show the browser window instead of running headless",
+    )
+
+
+def _add_resource_policy_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--resource-policy", choices=("strict", "block-external-images"), default="strict",
+        help="all external requests remain blocked; optionally treat only blocked images as nonfatal",
     )
 
 
@@ -417,6 +425,7 @@ def build_parser() -> argparse.ArgumentParser:
     investigate_parser.add_argument("--run-root", default="runs")
     investigate_parser.add_argument("--label", default="investigation")
     investigate_parser.add_argument("--headed", action="store_true")
+    _add_resource_policy_argument(investigate_parser)
     return parser
 
 
@@ -767,6 +776,7 @@ def _cmd_investigate(args) -> int:
             timeout_ms=args.timeout_ms,
             headed=args.headed,
             driver=driver,
+            resource_policy=args.resource_policy,
         )
     except Exception as exc:  # provider and input diagnostics may contain secrets
         message = (
@@ -823,6 +833,7 @@ def main(argv: list[str] | None = None) -> int:
             label=args.label,
             headless=not args.headed,
             timeout_ms=args.timeout_ms,
+            resource_policy=args.resource_policy,
         )
     except Exception as exc:  # noqa: BLE001 - CLI should fail cleanly
         print(f"{invocation} failed: {type(exc).__name__}: {exc}", file=sys.stderr)

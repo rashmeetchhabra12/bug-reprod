@@ -32,6 +32,13 @@ from .recipe import Action
 from .safety import is_loopback_url, resolve_target, validate_base_url
 
 ARIA_SNAPSHOT_LIMIT = 10_000
+RESOURCE_POLICIES = frozenset({"strict", "block-external-images"})
+
+
+def validate_resource_policy(value: Any) -> str:
+    if not isinstance(value, str) or value not in RESOURCE_POLICIES:
+        raise ValueError("resource_policy must be strict or block-external-images.")
+    return value
 
 
 class BrowserStartupError(RuntimeError):
@@ -156,8 +163,10 @@ class BrowserSession:
         headless: bool = True,
         timeout_ms: int = 10_000,
         host: PlaywrightHost | None = None,
+        resource_policy: str = "strict",
     ) -> None:
         self.base_url = validate_base_url(base_url)
+        self.resource_policy = validate_resource_policy(resource_policy)
         self.headless = headless
         self.timeout_ms = timeout_ms
         self._external_host = host
@@ -167,6 +176,9 @@ class BrowserSession:
         self._cdp: Any | None = None
         self.page: Page | None = None
         self.blocked_requests: list[str] = []
+        self.blocked_resources: list[dict[str, Any]] = []
+        self.guard_errors: list[str] = []
+        self._main_frame_id: str | None = None
 
     def __enter__(self) -> "BrowserSession":
         try:
@@ -179,6 +191,7 @@ class BrowserSession:
             # before it reaches the network. Playwright's route handler does not
             # intercept redirect destinations reliably.
             self._cdp = self._context.new_cdp_session(self.page)
+            self._main_frame_id = self._cdp.send("Page.getFrameTree")["frameTree"]["frame"]["id"]
             self._cdp.on("Fetch.requestPaused", self._guard_request)
             self._cdp.send(
                 "Fetch.enable",
@@ -201,13 +214,31 @@ class BrowserSession:
         request_url = (event.get("request") or {}).get("url", "")
         if not request_id:
             return
+        record = None
         try:
             if is_loopback_url(request_url):
                 self._cdp.send(
                     "Fetch.continueRequest", {"requestId": request_id}
                 )
             else:
-                self.blocked_requests.append(_describe_url(request_url))
+                description = _describe_url(request_url)
+                resource_type = event.get("resourceType", "Unknown")
+                image_only = (
+                    self.resource_policy == "block-external-images"
+                    and resource_type == "Image"
+                )
+                record = {
+                    "url": description,
+                    "resource_type": resource_type,
+                    "is_main_document": (
+                        resource_type == "Document" and event.get("frameId") == self._main_frame_id
+                    ),
+                    "disposition": "blocked",
+                    "fatal": not image_only,
+                    "at": _utc_now(),
+                }
+                self.blocked_requests.append(description)
+                self.blocked_resources.append(record)
                 self._cdp.send(
                     "Fetch.failRequest",
                     {
@@ -215,8 +246,30 @@ class BrowserSession:
                         "errorReason": "BlockedByClient",
                     },
                 )
-        except Exception:  # noqa: BLE001 - request may already be gone
-            pass
+        except Exception as exc:  # interception failure is never an allowed-image warning
+            if record is not None:
+                record["fatal"] = True
+            self.guard_errors.append(f"Request interception failed: {type(exc).__name__}.")
+
+    @property
+    def fatal_blocked_requests(self) -> list[str]:
+        return [item["url"] for item in self.blocked_resources if item["fatal"]]
+
+    def network_record(self) -> dict[str, Any]:
+        return {
+            "resource_policy": self.resource_policy,
+            "blocked_resources": [dict(item) for item in self.blocked_resources],
+            "request_guard_errors": list(self.guard_errors),
+        }
+
+    def check_network_policy(self) -> None:
+        if self.guard_errors:
+            raise BlockedTargetError(" ".join(self.guard_errors[:3]))
+        fatal = self.fatal_blocked_requests
+        if fatal:
+            raise BlockedTargetError(
+                "Blocked non-loopback request(s) during the action: " + ", ".join(fatal[:3])
+            )
 
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         self.close()
@@ -274,12 +327,9 @@ class BrowserSession:
         else:
             raise ValueError(f"Unsupported action type: {action.type!r}")
 
-        if self.blocked_requests:
-            raise BlockedTargetError(
-                "Blocked non-loopback request(s) during the action: "
-                + ", ".join(self.blocked_requests[:3])
-            )
-        return self.observe()
+        observation = self.observe()
+        self.check_network_policy()
+        return observation
 
     def _locator(self, locator: Any) -> Any:
         page = self._require_page()

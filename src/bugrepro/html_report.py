@@ -256,6 +256,9 @@ def _comparison(runs: dict[str, ReportRun]) -> tuple[bool, list[str]]:
     }
     if len(known_expectations) > 1:
         reasons.append("Expectation fingerprints differ between the selected runs.")
+    policies = {run.data.get("resource_policy", "strict") for run in runs.values()}
+    if len(policies) > 1:
+        reasons.append("Resource policies differ between the selected runs.")
 
     for role in replays:
         run = runs[role]
@@ -352,6 +355,7 @@ def _comparison_table(
         row("Attempt status", lambda run: _esc(_attempt_status(run))),
         row("Expected", lambda run: _esc(run.check.get("expected", ""))),
         row("Observed", lambda run: _esc(_observed_text(run))),
+        row("Resource policy", lambda run: _esc(run.data.get("resource_policy", "strict"))),
         row(
             "Recipe fingerprint",
             lambda run: fingerprint_cell(run.recipe_fingerprint, recipe_values),
@@ -516,6 +520,28 @@ def _errors_section(run: ReportRun) -> str:
             f"<p>Model calls: {_esc(model_calls.get('used', 0))} used / "
             f"{_esc(model_calls.get('limit', 0))} allowed.</p>"
         )
+    parts.append(_network_section(run))
+    return "".join(parts)
+
+
+def _network_section(run: ReportRun) -> str:
+    policy = run.data.get("resource_policy", "strict")
+    parts = [f"<h3>Resource policy: {_esc(policy)}</h3>",
+             "<p>All external requests remain blocked. Results describe the app "
+             "under this restricted environment; external images may be missing.</p>"]
+    resources = run.data.get("blocked_resources") or []
+    if resources:
+        items = "".join(
+            f"<li>{_esc(item.get('resource_type', 'Unknown'))}: "
+            f"<code>{_esc(item.get('url'))}</code> — blocked; "
+            f"fatal: {_esc(item.get('fatal'))}</li>"
+            for item in resources if isinstance(item, dict)
+        )
+        parts.append(f"<ul>{items}</ul>")
+    else:
+        parts.append("<p>No blocked resource records.</p>")
+    for error in run.data.get("request_guard_errors") or []:
+        parts.append(f"<p>Request guard error: {_esc(error)}</p>")
     return "".join(parts)
 
 
@@ -757,6 +783,7 @@ def render_report_html(runs: dict[str, ReportRun]) -> str:
       <h2>Errors and budget</h2>
       {_errors_section(attempt)}
     </section>
+    {''.join('<section class="card"><h2>' + _esc(run.label) + ' — blocked resources</h2>' + _network_section(run) + '</section>' for role, run in runs.items() if role != 'attempt')}
 
     <footer class="page">
       <p><strong>Reading the result.</strong> A failed check means the expected

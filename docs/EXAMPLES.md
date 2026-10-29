@@ -3,6 +3,12 @@
 Two small fixtures ship with the project. Both run entirely on loopback and use
 synthetic data.
 
+For a local app whose page embeds external images, `investigate`, `run`, and
+`replay` accept the explicit `--resource-policy block-external-images` option.
+All external requests stay blocked; only image blocks become nonfatal. The
+default remains `strict`. See [resource policies](USAGE.md#browser-resource-policies)
+for the restricted-environment interpretation and replay requirements.
+
 For a standalone model investigation, start either fixture and use
 `bugrepro investigate` with its loopback URL, a report file, a supported
 expectation file, and your configured model endpoint. See the complete
