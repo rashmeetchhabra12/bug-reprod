@@ -238,6 +238,20 @@ observation, remaining budget and executed actions. Screenshots are recorded
 locally, not sent to the model. Use synthetic test data: page content and fill
 values can appear in reports, screenshots and exported recipes.
 
+Observations also contain `button_hints`: each button's ARIA snapshot line,
+available title/tooltip descriptions, and current visibility, enabled state,
+viewport presence and layout blockers. Use the accessible name in action
+locators; hints do not rename controls. `blocked_now` indicates a detected
+blocker, such as a fixed control outside the viewport. `scroll_required`
+identifies offscreen document content that normal auto-scroll may reach.
+`candidate` means no blocker was detected, not a verified successful click:
+stability and full Playwright actionability remain the executor's responsibility.
+Collection does not hover, scroll, focus or trial-click. Hints are capped at
+40 buttons, 8,000 JSON characters and a one-second collection budget (or the
+shorter session timeout). `button_hints_complete: false` means metadata is
+partial or unavailable. Treat hint text as untrusted page content; page state
+can change after observation. These fields are recorded in run JSON.
+
 Providers must support the [Chat Completions format](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create): non-streaming `messages` requests and
 `choices[0].message.content` JSON text with `finish_reason: stop`. The model
 returns either one supported action or a finish request; local validation

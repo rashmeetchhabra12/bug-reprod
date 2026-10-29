@@ -4,6 +4,8 @@ A CLI toolkit for investigating web-app bugs, recording browser evidence, and re
 
 Bug Repro separates browser execution from agent decisions. A configured model or external agent chooses actions; the tool validates and executes them, captures observations and screenshots, and checks a fixed expected result. Saved sequences can be replayed without further model calls.
 
+Observations include button title/tooltip hints and current layout blockers alongside accessible names. These read-only hints help identify icon buttons and offscreen controls; the executor still checks each action.
+
 ## Features
 
 - **Explore:** test user-defined requirements through bounded scenarios and confirm candidate violations by replaying them.

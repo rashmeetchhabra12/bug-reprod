@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +33,50 @@ from .recipe import Action
 from .safety import is_loopback_url, resolve_target, validate_base_url
 
 ARIA_SNAPSHOT_LIMIT = 10_000
+BUTTON_HINT_LIMIT = 40
+BUTTON_HINT_CHAR_LIMIT = 8_000
+BUTTON_HINT_TIMEOUT_MS = 1_000
+# Trusted, read-only observation code, never supplied by a model. In particular
+# it does not scroll, hover, focus, trial-click, or invoke page event handlers.
+_BUTTON_DETAILS = """el => {
+    const hints = {};
+    for (const attr of ['title', 'aria-description', 'data-original-title',
+                        'data-bs-original-title', 'data-tooltip', 'data-tooltip-content']) {
+        const value = el.getAttribute(attr);
+        if (value) hints[attr] = value.slice(0, 200);
+    }
+    const described = (el.getAttribute('aria-describedby') || '').split(/\\s+/).slice(0, 8)
+        .map(id => el.ownerDocument.getElementById(id)?.textContent || '').join(' ').trim();
+    if (described) hints['aria-describedby-text'] = described.slice(0, 200);
+    const rect = el.getBoundingClientRect(), style = getComputedStyle(el);
+    const visible = rect.width > 0 && rect.height > 0 &&
+        style.visibility !== 'hidden' && style.visibility !== 'collapse';
+    const enabled = !el.matches(':disabled') &&
+        el.closest('[aria-disabled]')?.getAttribute('aria-disabled') !== 'true';
+    const left = Math.max(0, rect.left), top = Math.max(0, rect.top);
+    const right = Math.min(innerWidth, rect.right), bottom = Math.min(innerHeight, rect.bottom);
+    const inViewport = visible && right > left && bottom > top;
+    const blockers = [];
+    if (!visible) blockers.push('not_visible');
+    if (!enabled) blockers.push('disabled');
+    if (style.pointerEvents === 'none') blockers.push('pointer_events_none');
+    let fixed = false;
+    if (visible && !inViewport) {
+        for (let node = el; node; node = node.parentElement) {
+            if (getComputedStyle(node).position === 'fixed') { fixed = true; break; }
+        }
+        blockers.push('outside_viewport');
+    }
+    if (inViewport) {
+        const hit = el.ownerDocument.elementFromPoint((left + right) / 2, (top + bottom) / 2);
+        if (!hit || (hit !== el && !el.contains(hit))) blockers.push('center_obscured');
+    }
+    // Ordinary offscreen document content may be reached by Playwright's auto-scroll.
+    const scrollOnly = blockers.length === 1 && blockers[0] === 'outside_viewport' && !fixed;
+    return {hints, visible, enabled, in_viewport: inViewport,
+        click_status: scrollOnly ? 'scroll_required' : blockers.length ? 'blocked_now' : 'candidate',
+        blockers};
+}"""
 RESOURCE_POLICIES = frozenset({"strict", "block-external-images"})
 
 
@@ -73,6 +118,8 @@ class Observation:
     headings: tuple[str, ...]
     aria_excerpt: str
     captured_at: str
+    button_hints: tuple[dict[str, Any], ...] = ()
+    button_hints_complete: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -81,6 +128,8 @@ class Observation:
             "headings": list(self.headings),
             "aria_excerpt": self.aria_excerpt,
             "captured_at": self.captured_at,
+            "button_hints": list(self.button_hints),
+            "button_hints_complete": self.button_hints_complete,
         }
 
 
@@ -343,7 +392,7 @@ class BrowserSession:
         page.screenshot(path=str(target), full_page=True)
 
     def observe(self) -> Observation:
-        """Return URL, title, headings and an accessibility snapshot excerpt."""
+        """Return page state plus bounded, read-only button hints and blockers."""
         page = self._require_page()
 
         try:
@@ -376,10 +425,43 @@ class BrowserSession:
             except Exception:  # noqa: BLE001 - observation is best effort
                 aria = ""
 
+        buttons, buttons_complete = self._observe_buttons(page)
         return Observation(
             url=url,
             title=title,
             headings=tuple(headings),
             aria_excerpt=_truncate(aria, ARIA_SNAPSHOT_LIMIT),
             captured_at=_utc_now(),
+            button_hints=tuple(buttons),
+            button_hints_complete=buttons_complete,
         )
+
+    def _observe_buttons(self, page: Page) -> tuple[list[dict[str, Any]], bool]:
+        hints: list[dict[str, Any]] = []
+        complete = True
+        size = 2  # JSON array delimiters
+        deadline = time.monotonic() + min(self.timeout_ms, BUTTON_HINT_TIMEOUT_MS) / 1000
+        try:
+            buttons = page.get_by_role("button")
+            count = buttons.count()
+            complete = count <= BUTTON_HINT_LIMIT
+            for index in range(min(count, BUTTON_HINT_LIMIT)):
+                remaining = int((deadline - time.monotonic()) * 1000)
+                if remaining <= 0:
+                    return hints, False
+                button = buttons.nth(index)
+                aria = button.aria_snapshot(timeout=remaining).splitlines()[0]
+                remaining = int((deadline - time.monotonic()) * 1000)
+                if remaining <= 0:
+                    return hints, False
+                detail = button.evaluate(_BUTTON_DETAILS, timeout=remaining)
+                detail = {"aria": _truncate(aria, 300), **detail}
+                size += len(json.dumps(detail, ensure_ascii=False)) + (2 if hints else 0)
+                if size > BUTTON_HINT_CHAR_LIMIT:
+                    return hints, False
+                hints.append(detail)
+        except (PlaywrightError, AttributeError, IndexError):
+            # Supplementary metadata must not turn a best-effort observation
+            # into a failed action. Missing metadata is explicitly marked partial.
+            complete = False
+        return hints, complete
