@@ -127,7 +127,7 @@ def _add_state_file_argument(parser: argparse.ArgumentParser) -> None:
         default=None,
         help=(
             "local service state file "
-            "(default: per-user BugRepro state path, outside the repo)"
+            "(default: per-user service state path, outside the repo)"
         ),
     )
 
@@ -160,8 +160,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bugrepro",
         description=(
-            "Browser bug reproduction: scripted recipes plus a persistent "
-            "local service for the Alan agent."
+            "ReproWitness: investigate local web apps, record browser evidence, "
+            "and replay validated recipes with the bugrepro command."
         ),
     )
     sub = parser.add_subparsers(dest="command", required=True)

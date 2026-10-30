@@ -1,6 +1,6 @@
-# Agent guide - Bug Repro
+# Agent guide - ReproWitness
 
-Bug Repro is a local browser-evidence tool. Read `README.md`,
+ReproWitness is a local browser-evidence tool. Read `README.md`,
 `docs/USAGE.md`, and `docs/ALAN_INTEGRATION.md` before extending it. The
 scripted mechanics checks must stay green and remain labelled as scripted.
 

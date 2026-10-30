@@ -593,7 +593,7 @@ class _ServiceHTTPServer(ThreadingHTTPServer):
 
 
 class _Handler(BaseHTTPRequestHandler):
-    server_version = "BugReproAgent/0.2"
+    server_version = "ReproWitnessAgent/0.2"
 
     # ------------------------------------------------------------ helpers
     @property
@@ -908,7 +908,7 @@ def run_service(config: ServiceConfig) -> None:
         target=_watch_for_shutdown, name="bugrepro-agent-watchdog", daemon=True
     )
 
-    print(f"Bug Repro agent service listening on {url}", flush=True)
+    print(f"ReproWitness agent service listening on {url}", flush=True)
     print(f"State file: {state_file}", flush=True)
 
     watcher.start()

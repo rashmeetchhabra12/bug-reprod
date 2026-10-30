@@ -780,13 +780,13 @@ def render_report_html(runs: dict[str, ReportRun]) -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Bug Repro evidence report - {_esc(attempt.run_id)}</title>
+  <title>ReproWitness evidence report - {_esc(attempt.run_id)}</title>
   <style>{CSS}</style>
 </head>
 <body>
   <div class="wrap">
     <header class="page">
-      <h1>Bug Repro evidence report</h1>
+      <h1>ReproWitness evidence report</h1>
       <p class="muted">Generated {_esc(_utc_now())} | self-contained file | no scripts |
         source run <code>{_esc(attempt.run_id)}</code></p>
     </header>
@@ -1447,13 +1447,13 @@ def render_exploration_html(report: ExplorationReport) -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Bug Repro exploration - {_esc(manifest.get("exploration_id", ""))}</title>
+  <title>ReproWitness exploration - {_esc(manifest.get("exploration_id", ""))}</title>
   <style>{CSS}</style>
 </head>
 <body>
   <div class="wrap">
     <header class="page">
-      <h1>Bug Repro exploration report</h1>
+      <h1>ReproWitness exploration report</h1>
       <p class="muted">Generated {_esc(_utc_now())} | self-contained file | no scripts |
         exploration <code>{_esc(manifest.get("exploration_id", ""))}</code></p>
     </header>

@@ -1,7 +1,11 @@
-# Bug Repro - recorded showcase
+# ReproWitness - recorded showcase
 
 This folder contains selected, self-contained evidence reports from the bundled
 task-list sample. Start with [`index.html`](index.html).
+
+The archived reports in `evidence/` retain the historical product name
+"Bug Repro" and their original contents. They have not been regenerated or
+edited for this rename. ReproWitness continues to use the `bugrepro` command.
 
 ## Reports
 

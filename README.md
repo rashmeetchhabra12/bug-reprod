@@ -1,8 +1,12 @@
-# Bug Repro
+# ReproWitness
 
 A CLI toolkit for investigating web-app bugs, recording browser evidence, and replaying the same checks after a fix.
 
-Bug Repro separates browser execution from agent decisions. A configured model or external agent chooses actions; the tool validates and executes them, captures observations and screenshots, and checks a fixed expected result. Saved sequences can be replayed without further model calls.
+ReproWitness runs with the **`bugrepro` command**. The Python distribution and
+module remain named `bugrepro`, and the version remains `0.1.0`. Existing
+commands, recipes and run formats continue to work without migration.
+
+ReproWitness separates browser execution from agent decisions. A configured model or external agent chooses actions; the tool validates and executes them, captures observations and screenshots, and checks a fixed expected result. Saved sequences can be replayed without further model calls.
 
 Observations include button title/tooltip hints and current layout blockers alongside accessible names. These read-only hints help identify icon buttons and offscreen controls; the executor still checks each action.
 
@@ -26,8 +30,8 @@ remain fatal. See [usage](docs/USAGE.md#bounded-action-recovery).
 Requires Python 3.11+ and Chromium installed through Playwright. The commands below use Windows PowerShell.
 
 ```powershell
-git clone https://github.com/rashmeetchhabra12/bug-reprod.git
-cd bug-reprod
+git clone https://github.com/rashmeetchhabra12/ReproWitness.git
+cd ReproWitness
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 .\.venv\Scripts\python.exe -m playwright install chromium
@@ -182,7 +186,7 @@ from the selected environment variable and never recorded. See
 You can also use an installed Codex CLI with its own login:
 
 Windows npm installations are supported by resolving their packaged native
-`codex.exe`; Bug Repro never runs the npm shell wrapper.
+`codex.exe`; ReproWitness never runs the npm shell wrapper.
 
 ```powershell
 .\.venv\Scripts\bugrepro.exe investigate `
@@ -207,7 +211,7 @@ Start the persistent browser service:
 
 Give your agent the local target URL, a bug report or requirements, and supported expectations. The CLI exposes commands to start a session, observe the page, execute validated actions, finish, and export a recipe. The browser remains open between commands.
 
-External agents can use their local command tools. This interface needs no provider key in Bug Repro. All investigation paths and prewritten recipes use the same executor; recorded replay follows the saved actions without asking an agent to choose them again.
+External agents can use their local command tools. This interface needs no provider key in ReproWitness. All investigation paths and prewritten recipes use the same executor; recorded replay follows the saved actions without asking an agent to choose them again.
 
 See `bugrepro agent --help` and `bugrepro explore --help` for the available commands.
 
@@ -235,7 +239,7 @@ those image blocks fatal. Scripts, frames, navigation, and unrelated errors
 remain fatal. Reports show the policy and blocked resources; results describe
 the app in that restricted environment. Use the same explicit policy for a replay.
 
-Bug Repro records and checks browser behaviour; it does not automatically repair application code. A passing scenario covers only the expectation that was tested.
+ReproWitness records and checks browser behaviour; it does not automatically repair application code. A passing scenario covers only the expectation that was tested.
 
 ## Development
 

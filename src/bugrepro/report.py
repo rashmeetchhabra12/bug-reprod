@@ -90,7 +90,7 @@ def render_report(run: dict[str, Any]) -> str:
     check = run["check"]
     status = check["status"]
     lines: list[str] = [
-        f"# Bug Repro run: {run['run_id']}",
+        f"# ReproWitness run: {run['run_id']}",
         "",
         f"**Verdict:** **{VERDICTS[status]}**",
         "",

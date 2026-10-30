@@ -1,6 +1,6 @@
 # Usage
 
-Bug Repro has three ways to drive a browser:
+ReproWitness has three ways to drive a browser:
 
 1. **Scripted recipes** - a validated JSON sequence run by the CLI. No model is
    involved.
@@ -17,6 +17,8 @@ format, and report renderer.
 ## Install
 
 ```powershell
+git clone https://github.com/rashmeetchhabra12/ReproWitness.git
+cd ReproWitness
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 .\.venv\Scripts\python.exe -m playwright install chromium
@@ -25,6 +27,8 @@ python -m venv .venv
 All commands below run from the repository root. On Windows, use PowerShell
 5.1 or later. The `.venv\Scripts\...` commands do not require environment
 activation; use that prefix in each new terminal too.
+ReproWitness uses the existing `bugrepro` distribution, Python module and CLI.
+Legacy per-user `BugRepro` state directories remain unchanged for compatibility.
 
 ## Concepts
 
@@ -426,8 +430,8 @@ Start the task fixture in another terminal at the repository root:
 .\.venv\Scripts\bugrepro.exe serve --app tasks --mode buggy --port 8103
 ```
 
-No endpoint or Bug Repro API-key configuration is required
-for the Codex backend. Bug Repro never opens Codex credential files, extracts
+No endpoint or ReproWitness API-key configuration is required
+for the Codex backend. ReproWitness never opens Codex credential files, extracts
 login tokens, or manages login. On Windows, npm shims such as `codex.cmd`
 are resolved to the installed package's native `codex.exe` (nested or hoisted
 platform dependency, or bundled vendor directory). The wrapper is never run;
@@ -463,7 +467,7 @@ event afterward cannot undo an independent action. Do not treat this backend
 as a security boundary for hostile pages or run it where strict tool isolation
 is required. The adapter never intentionally delegates browser operations,
 filesystem edits or commands to Codex; all accepted browser actions still pass
-through Bug Repro's executor.
+through ReproWitness's executor.
 
 `--model-timeout` bounds each decision subprocess (positive, at most 120 seconds); preflight
 has three separate 10-second limits. `--model-call-limit` counts decision
@@ -477,7 +481,7 @@ notice during inference still fail the investigation.
 Missing CLI, missing restrictions, authentication failures, quota/rate limits,
 nonzero exit, malformed/incomplete output and tool events are errors, never
 reproduced bugs. Raw CLI stdout/stderr and reasoning are not saved as evidence
-or printed by Bug Repro. Only validated decisions and sanitized errors are
+or printed by ReproWitness. Only validated decisions and sanitized errors are
 recorded. Codex itself manages its own diagnostics and login storage.
 
 Completed error-free runs export their actual accepted actions automatically.

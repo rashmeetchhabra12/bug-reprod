@@ -1,7 +1,7 @@
 # Alan integration
 
-Bug Repro supports an external agent such as Alan as the decision maker. The
-agent observes the page and chooses actions; Bug Repro validates, executes,
+ReproWitness supports an external agent such as Alan as the decision maker. The
+agent observes the page and chooses actions; ReproWitness validates, executes,
 records, checks, and replays them. The external-agent commands do not call a
 model and do not need a provider API key. For the separate standalone model
 command, see [USAGE.md](USAGE.md#standalone-model-investigation).

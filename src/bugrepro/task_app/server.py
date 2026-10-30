@@ -156,7 +156,7 @@ def _cookie(name: str, value: str | None) -> str:
 
 class TaskAppHandler(BaseHTTPRequestHandler):
     mode = "buggy"
-    server_version = "BugReproTaskApp/0.1"
+    server_version = "ReproWitnessTaskApp/0.1"
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         path = urlsplit(self.path).path
@@ -323,7 +323,7 @@ def serve(*, mode: str, host: str = "127.0.0.1", port: int = 8103) -> None:
     actual_port = httpd.server_address[1]
     display_host = f"[{host}]" if ":" in host else host
     print(
-        f"Bug Repro task app ({mode}) listening on "
+        f"ReproWitness task app ({mode}) listening on "
         f"http://{display_host}:{actual_port}",
         flush=True,
     )

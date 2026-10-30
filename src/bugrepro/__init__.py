@@ -1,7 +1,7 @@
-"""Bug Repro - local browser evidence, recording, checking and replay.
+"""ReproWitness - local browser evidence, recording, checking and replay.
 
-The package never calls a language model. External agents submit validated
-actions through the local service; this code executes and records them.
+Scripted runs and external or configured decision backends share the browser
+executor. Accepted actions are validated, recorded, checked and replayed.
 """
 
 __version__ = "0.1.0"

@@ -146,7 +146,7 @@ def _home_page(signed_in: str | None, mode: str) -> str:
       <p>Demo accounts: <code>alice</code>, <code>bob</code>. No password.</p>
     </section>
 """
-    return _page(title="Bug Repro demo home", signed_in=signed_in, body=body, mode=mode)
+    return _page(title="ReproWitness demo home", signed_in=signed_in, body=body, mode=mode)
 
 
 def _profile_page(signed_in: str | None, shown: str, mode: str, cache_state: str) -> str:
@@ -209,7 +209,7 @@ class SampleAppHandler(BaseHTTPRequestHandler):
     """Shared handler; ``mode`` is set on the per-server subclass."""
 
     mode = "buggy"
-    server_version = "BugReproSample/0.1"
+    server_version = "ReproWitnessSample/0.1"
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         path = urlsplit(self.path).path
@@ -394,7 +394,7 @@ def serve(*, mode: str, host: str = "127.0.0.1", port: int = 8101) -> None:
     actual_port = httpd.server_address[1]
     display_host = f"[{host}]" if ":" in host else host
     print(
-        f"Bug Repro sample app ({mode}) listening on "
+        f"ReproWitness sample app ({mode}) listening on "
         f"http://{display_host}:{actual_port}",
         flush=True,
     )
