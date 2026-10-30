@@ -23,7 +23,8 @@ python -m venv .venv
 ```
 
 All commands below run from the repository root. On Windows, use PowerShell
-5.1 or later.
+5.1 or later. The `.venv\Scripts\...` commands do not require environment
+activation; use that prefix in each new terminal too.
 
 ## Concepts
 
@@ -31,8 +32,10 @@ All commands below run from the repository root. On Windows, use PowerShell
   an ordered list of actions.
 - **Action** - one of `goto`, `click`, `fill`, `reload`, `observe`, or
   `screenshot`.
-- **Expectation** - a supported check that is fixed before the actions run.
-  It is never derived from the page or from a model response.
+- **Expectation** - a user-approved supported check that is frozen before
+  browser actions. The guide may ask a model for an unfrozen suggestion, but
+  the user must approve it. Once frozen, the model cannot derive a replacement
+  from the page or change the check.
 - **Run** - a new directory containing the executed recipe, `run.json`,
   `report.md`, and screenshots.
 - **Driver** - a label for how the sequence was produced:
@@ -126,11 +129,21 @@ Checks wait for the expected content up to the operation timeout. A missing
 container is an execution error; a present container with wrong content is a
 failed check.
 
+Region checks use `region` and `text`, not a heading level. Their complete
+review JSON also includes `level: 1`; it does not add a heading requirement
+to a region-item check.
+
 ## Guided investigation
 
 ```powershell
 .\.venv\Scripts\bugrepro.exe guide
 ```
+
+For a complete first run that needs no separately installed web app, follow
+the [bundled task-fixture walkthrough](../README.md#guided-investigation).
+It includes the exact server commands, guide inputs, expected exit codes,
+model-free replay and report-opening command. The DokuWiki example below
+assumes you already have DokuWiki installed and configured separately.
 
 The prompts collect a loopback app URL and a multiline bug report or task
 (finish with a line containing only `.`). Choose manual expectation entry or
@@ -360,8 +373,10 @@ model can request finish; requesting another action or needing another model
 call past its limit makes the attempt an error. `--timeout-ms` controls browser
 operations (500-60000); `--headed`, `--run-root` and `--label` are also available.
 
-The expectation is frozen before the first model call. The model cannot set
-the result: the existing checker evaluates it only on finish. Exit codes are
+The approved expectation is frozen before the first investigation decision
+and before browser actions. An optional guide proposal is a preparation call
+before approval and freezing. The model cannot set the result: the existing
+checker evaluates it only on finish. Exit codes are
 0 for passed, 1 for failed, and 2 for error/incomplete. A failed expectation
 records an observation, not a verified root cause or replay-confirmed finding.
 The model may stop too early or choose an irrelevant sequence; review evidence.
@@ -405,8 +420,13 @@ codex login status
   --label codex-task-buggy
 ```
 
-Start the task fixture with `bugrepro serve --app tasks --mode buggy --port 8103`
-in another terminal. No endpoint or Bug Repro API-key configuration is required
+Start the task fixture in another terminal at the repository root:
+
+```powershell
+.\.venv\Scripts\bugrepro.exe serve --app tasks --mode buggy --port 8103
+```
+
+No endpoint or Bug Repro API-key configuration is required
 for the Codex backend. Bug Repro never opens Codex credential files, extracts
 login tokens, or manages login. On Windows, npm shims such as `codex.cmd`
 are resolved to the installed package's native `codex.exe` (nested or hoisted

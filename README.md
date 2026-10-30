@@ -33,6 +33,9 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m playwright install chromium
 ```
 
+Run the commands from the cloned repository root in each terminal. They use
+the virtual environment explicitly; activation is not required.
+
 ## Quickstart
 
 The repository includes an account-switching sample app with buggy and fixed versions. This quickstart runs a supplied recipe to demonstrate recording and replay.
@@ -67,7 +70,63 @@ The expectation should now pass. Add `--headed` to watch the browser.
 
 ## Guided investigation
 
-Start without preparing input files:
+To try the guide with the bundled task app, first install and sign in to your
+decision backend. For Codex, check `codex --version` and `codex login status`;
+see [Codex setup](docs/USAGE.md#codex-cli-decisions) if it is not ready.
+No provider API key is needed for this backend.
+
+In one PowerShell terminal, start the task fixture and leave it running:
+
+```powershell
+.\.venv\Scripts\bugrepro.exe serve --app tasks --mode buggy --port 8103
+```
+
+In a second terminal at the same repository root, start the guide:
+
+```powershell
+.\.venv\Scripts\bugrepro.exe guide --decision-backend codex-cli
+```
+
+Enter `http://127.0.0.1:8103` and this task, ending with a separate `.` line:
+
+```text
+Add a task named Prepare demo task. After reloading, it should still appear in the Tasks list.
+.
+```
+
+Choose `2` to request a proposal. Review `region_text_exact`, region `Tasks`,
+text `Prepare demo task`; accept with `a` only if it matches, then confirm
+freezing with `y`. Alternatively, choose manual entry (`1`), then region item
+(`2`), region `Tasks`, and exact text `Prepare demo task`.
+
+This fixture intentionally loses the task on reload. If the recorded actions
+include adding the task and reloading without errors, the check should fail
+with exit code `1`; that is the demo's expected result, not an installation
+failure. Inspect the printed HTML report and copy the printed replay command.
+Replaying on the same buggy fixture should fail the same check without model
+calls. If the model chooses another workflow or an action fails, report that
+outcome instead of assuming the demo reproduced the bug.
+
+To compare with the fixed task fixture, start it in another terminal:
+
+```powershell
+.\.venv\Scripts\bugrepro.exe serve --app tasks --mode fixed --port 8104
+```
+
+Once that server is running, return to the guide's terminal and replay:
+
+```powershell
+.\.venv\Scripts\bugrepro.exe replay runs\RUN_DIRECTORY --base-url http://127.0.0.1:8104
+```
+
+Replace `RUN_DIRECTORY` with the exported run printed by the guide. The
+unchanged check should pass with exit `0`. To open the original report:
+
+```powershell
+Invoke-Item runs\RUN_DIRECTORY\report.html
+```
+
+For your own local app, start without preparing input files:
 
 ```powershell
 .\.venv\Scripts\bugrepro.exe guide
