@@ -6,6 +6,11 @@ records, checks, and replays them. The external-agent commands do not call a
 model and do not need a provider API key. For the separate standalone model
 command, see [USAGE.md](USAGE.md#standalone-model-investigation).
 
+The external-agent interface remains strict: action failures prevent a formal
+result and recipe export. Optional bounded action recovery is available only
+to managed `investigate` and `guide` decision backends; it cannot be enabled by
+adding fields to an HTTP action or start request.
+
 The same contract works for any external agent that can run local commands:
 start a persistent session, read the JSON observation, submit one action, then
 finish or export.

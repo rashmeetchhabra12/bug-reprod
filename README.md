@@ -15,6 +15,12 @@ Observations include button title/tooltip hints and current layout blockers alon
 
 Each investigation uses an isolated browser context. Action failures and browser errors are reported separately from failed expectations.
 
+`investigate` and `guide` optionally accept `--action-recovery-limit 1` or `2`
+(default `0`, strict). Only proven pre-dispatch failures can recover. Reports
+retain failed attempts; exported recipes replay only the successful path, with
+an explicit mapping to source attempt indices. Safety and execution errors
+remain fatal. See [usage](docs/USAGE.md#bounded-action-recovery).
+
 ## Installation
 
 Requires Python 3.11+ and Chromium installed through Playwright. The commands below use Windows PowerShell.

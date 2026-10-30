@@ -65,9 +65,13 @@ scripted mechanics checks must stay green and remain labelled as scripted.
 7. **Never overwrite a run.** `allocate_run_dir` creates directories
    exclusively and adds a suffix on collision. Do not write into an existing
    run directory.
-8. **Keep errors separate.** `action_failures` (locator/action) and
-   `execution_errors` (browser/session) both force check status `error`. A
-   timeout, missing element, budget exhaustion or browser crash is never a
+8. **Keep errors separate.** Scripted runs, replay, exploration and the external
+   agent service remain strict: action failures or execution errors force
+   check status `error`. Managed `investigate`/`guide` may opt into bounded
+   recovery only for proven pre-dispatch failures. Retain all failed attempts;
+   unresolved failures and every execution/safety error still force `error`.
+   Export only successful actions with an explicit source-attempt mapping.
+   A timeout, missing element, budget exhaustion or crash is never itself a
    reproduced bug.
 9. **Wait for content, not just the container.** `check.py` waits for the
    expected heading/region content up to the timeout. A present container with

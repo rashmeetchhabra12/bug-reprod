@@ -55,6 +55,11 @@ Return exactly one JSON object: {"action": ACTION} or {"finish": true}.
 Finish only when the reported sequence has been attempted and the frozen
 expectation can be checked. Do not decide whether the expectation passed.
 Never change or submit an expectation. No code, CSS, XPath, or tool calls.
+If latest.recovery.can_continue is true after a failed action, no input was
+issued for that attempt. Use the fresh observation to select another validated
+action within the remaining budgets. Failed attempts are not successful actions.
+A successful application action may resolve pending recovery; observe and
+screenshot alone cannot. Finishing with pending failures gives an error.
 ACTION is one of:
 {"type":"goto","path":"/same-origin-path"}
 {"type":"click","locator":{"role":"button","name":"accessible name","exact":true}}
@@ -179,6 +184,7 @@ def investigate(
     driver: str = "model-agent",
     resource_policy: str = "strict",
     progress: Callable[[str], None] | None = None,
+    action_recovery_limit: int = 0,
 ) -> dict[str, Any]:
     """Run one isolated service worker; replay remains completely independent."""
     def notify(message: str) -> None:
@@ -192,6 +198,8 @@ def investigate(
                 pass
 
     validate_base_url(target)
+    from .recovery import validate_recovery_limit
+    validate_recovery_limit(action_recovery_limit)
     if not 1 <= model_call_limit <= 100:
         raise ModelError("Model call limit must be between 1 and 100.")
     payload = {"target": target, "bug_report": bug_report, "expectation": expectation,
@@ -204,9 +212,10 @@ def investigate(
     service.start_worker()
     calls = 0
     history: list[dict[str, Any]] = []
+    attempts: list[dict[str, Any]] = []
     driver_error = None
     try:
-        start = service.submit(lambda: service.start_investigation(payload))
+        start = service.submit(lambda: service.start_investigation(payload, action_recovery_limit=action_recovery_limit))
         session_id = start["session_id"]
         try:
             latest = service.submit(lambda: service.observe(session_id))
@@ -215,14 +224,18 @@ def investigate(
                     raise ModelError("Model call budget exhausted before finish.")
                 calls += 1
                 notify(f"Waiting for decision (call {calls}/{model_call_limit}).")
-                decision = model_client.choose({"bug_report": bug_report,
+                context = {"bug_report": bug_report,
                     "expectation": expectation, "target": target, "latest": latest,
                     "executed_actions": history,
-                    "model_calls_remaining": model_call_limit - calls})
+                    "model_calls_remaining": model_call_limit - calls}
+                if action_recovery_limit:
+                    context["attempted_actions"] = attempts
+                model_client.reject_secret(context)
+                decision = model_client.choose(context)
                 if decision.get("finish") is True:
                     break
                 action = decision["action"]
-                number = len(history) + 1
+                number = len(attempts) + 1
                 kind = action.get("type")
                 kind = kind if kind in ACTION_TYPES else "unsupported"
                 notify(f"Executing action {number}: {kind}.")
@@ -233,8 +246,16 @@ def investigate(
                     raise
                 succeeded = latest["status"] == "ok" and latest["attempt_status"] == "active"
                 notify(f"Action {number} {'succeeded' if succeeded else 'failed'}.")
-                history.append(action)
-                if latest["status"] != "ok" or latest["attempt_status"] != "active":
+                attempts.append({"index": number, "action": action, "status": latest["status"],
+                                 "failure_code": latest.get("action_result", {}).get("failure_code")})
+                if succeeded:
+                    history.append(action)
+                if action_recovery_limit:
+                    if not latest.get("recovery", {}).get("can_continue", False):
+                        break
+                    if not succeeded:
+                        notify("Pre-dispatch failure recorded; bounded recovery available.")
+                elif latest["status"] != "ok" or latest["attempt_status"] != "active":
                     break
         except (Exception, KeyboardInterrupt) as exc:
             # Provider diagnostics/output must never enter records, including echoed keys.

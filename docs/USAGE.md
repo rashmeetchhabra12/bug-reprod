@@ -223,6 +223,60 @@ output are unchanged. Interactive guide mode needs no input files; approved
 inputs are recorded by the existing engine in a new run directory. Unaccepted
 proposals and provider diagnostics are not saved as investigation artifacts.
 
+## Bounded action recovery
+
+`investigate` and `guide` accept `--action-recovery-limit 0`, `1` or `2`.
+The default `0` retains strict behavior. For example:
+
+```powershell
+.\.venv\Scripts\bugrepro.exe guide --decision-backend codex-cli --action-recovery-limit 1
+```
+
+Recovery works with either decision backend. It applies only when a read-only
+preflight proves no input was issued: missing or ambiguous locators, native
+disabled controls, read-only text controls, invisible boxes, and a narrow case
+of a control fixed wholly outside the viewport. For the last case, transforms,
+containment, animations and other uncertain containing-block conditions prevent
+classification. Ordinary offscreen content may be scrolled into view by
+Playwright; an offscreen rectangle or button hint alone is insufficient.
+Preflight never trial-clicks, scrolls, hovers or focuses a control. A control's
+state can change after this snapshot; it is not a prediction of future state.
+
+After an eligible failure, the model receives a fresh observation and a fixed
+error code, not raw Playwright call logs or resolved DOM snippets. Every failed
+attempt still consumes an action slot; choosing the next action consumes a
+decision call. Neither budget is extended, and recovery opportunities are a
+total for the run, not reset after success. The preflight and click/fill share
+one action timeout. A successful `goto`, `click`, `fill` or `reload` can resolve
+pending recovery. `observe` and `screenshot` alone cannot. Finishing with a
+pending failure, exceeding a limit, or running out of budget prevents the
+formal check and export.
+
+An exception after dispatch may have changed application state and is fatal.
+Uncertain failures, request/URL guards, crashes, unavailable fresh observations,
+evidence failures and provider errors are also fatal. The selected resource
+policy is unchanged; explicitly nonfatal blocked images remain recorded and
+blocked. Recovery never allows an external request.
+
+Run JSON keeps every attempt and historical action failure, including its
+`before_dispatch` phase and `resolved_by` attempt index. Optional `recovery`
+metadata distinguishes recovered and pending failures. HTML and Markdown show
+the failed attempts and explain the successful-path export. Recipe actions
+remain ordinary validated data, with the unchanged frozen expectation.
+`export.source_attempt_indices` lists the source attempt for each recipe action;
+`export.omitted_attempt_indices` lists failed attempts excluded from that recipe.
+Reports validate this mapping against the actual exported recipe.
+
+Replay repeats **the successful path, not the failed attempts**. Omitting even
+a read-only failed attempt removes elapsed time, so an export is not proof of
+equivalent replay state. Confirm the outcome with a fresh, model-free replay.
+A recovered failed expectation is an observed mismatch, not automatically a
+confirmed product bug. Any unresolved execution error still means `error`.
+Scripted `run`, `replay`, exploration and the external-agent HTTP interface
+remain strict; this option is only for managed `investigate` and `guide`.
+Existing record and recipe versions are unchanged; recovery and mapping fields
+are additive. Older tools may not understand them.
+
 ## Standalone model investigation
 
 For non-loopback providers, set `OPENAI_API_KEY` in your process environment

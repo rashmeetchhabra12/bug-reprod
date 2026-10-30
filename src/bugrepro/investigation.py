@@ -29,6 +29,7 @@ from .browser import (
 from .check import CheckResult, evaluate_expectation
 from .expectations import Expectation
 from .recipe import Action, Recipe, recipe_fingerprint, write_recipe
+from .recovery import APPLICATION_ACTIONS, PreDispatchFailure, validate_recovery_limit, validate_export_mapping
 from .report import render_report
 from .runner import (
     ActionRecord,
@@ -86,6 +87,7 @@ class Investigation:
         allowed_actions: frozenset[str] | None = None,
         allowed_fill_texts: frozenset[str] | None = None,
         invocation: str = "agent",
+        action_recovery_limit: int = 0,
     ) -> None:
         if driver not in INVESTIGATION_DRIVERS:
             raise ValueError(f"unsupported investigation driver: {driver}")
@@ -106,6 +108,9 @@ class Investigation:
         self.allowed_actions = allowed_actions
         self.allowed_fill_texts = allowed_fill_texts
         self.invocation = invocation
+        self.action_recovery_limit = validate_recovery_limit(action_recovery_limit)
+        self.recovery_used = 0
+        self.recovery_fatal = False
 
         self.started_at = _iso()
         self.finished_at: str | None = None
@@ -153,7 +158,9 @@ class Investigation:
         allowed_fill_texts: frozenset[str] | None = None,
         invocation: str = "agent",
         resource_policy: str = "strict",
+        action_recovery_limit: int = 0,
     ) -> "Investigation":
+        validate_recovery_limit(action_recovery_limit)
         session = BrowserSession(
             base_url=base_url,
             headless=headless,
@@ -195,6 +202,7 @@ class Investigation:
             allowed_actions=allowed_actions,
             allowed_fill_texts=allowed_fill_texts,
             invocation=invocation,
+            action_recovery_limit=action_recovery_limit,
         )
 
     # ------------------------------------------------------------- runtime
@@ -246,6 +254,8 @@ class Investigation:
     # ------------------------------------------------------------- actions
     def execute_action(self, action: Action, rationale: str | None = None) -> dict[str, Any]:
         self._ensure_active("execute an action")
+        if self.recovery_fatal:
+            raise InvestigationError("A fatal failure prevents further actions.", code="session_not_active", http_status=409)
         self.touch()
 
         if self.allowed_actions is not None and action.type not in self.allowed_actions:
@@ -268,6 +278,8 @@ class Investigation:
 
         if self.budget_used >= self.budget_limit:
             self.budget_exhausted = True
+            if self.action_recovery_limit:
+                self.recovery_fatal = True
             message = (
                 f"Action budget exhausted ({self.budget_limit} actions already used). "
                 "The attempt is incomplete and cannot become a confirmed reproduction."
@@ -289,6 +301,8 @@ class Investigation:
         self.budget_used += 1
         index = len(self.actions) + 1
         started = time.perf_counter()
+        if self.action_recovery_limit:
+            return self._execute_with_recovery(action, rationale, index, started)
 
         try:
             observation = self.session.perform(action)
@@ -426,6 +440,100 @@ class Investigation:
             status="ok", error=None, observation=observation
         )
 
+    def _unresolved_failures(self) -> list[dict[str, Any]]:
+        if not self.action_recovery_limit:
+            return self.action_failures
+        successful = {r.index for r in self.actions if r.status == "ok" and r.type in APPLICATION_ACTIONS}
+        return [f for f in self.action_failures
+                if not (f.get("recoverable") is True and f.get("resolved_by") in successful)]
+
+    def recovery_summary(self) -> dict[str, Any]:
+        pending = [f["index"] for f in self._unresolved_failures()]
+        return {"limit": self.action_recovery_limit, "used": self.recovery_used,
+                "pending_attempt_indices": pending,
+                "recovered_count": len(self.action_failures) - len(pending),
+                "fatal": self.recovery_fatal,
+                "can_continue": not (self.recovery_fatal or self.execution_errors or self.closed or self.budget_exhausted)
+                    and self.attempt_status == "active"}
+
+    def _execute_with_recovery(self, action, rationale, index, started):
+        observation = None
+        screenshot = None
+        phase = "dispatch_or_later"
+        code = "action_execution_failed"
+        eligible = False
+        try:
+            observation = self.session.perform(action, preflight=True)
+            if not self.session.is_healthy():
+                raise BrowserStartupError("Browser unavailable.")
+            code = "evidence_failure"
+            filename = f"{index:02d}-{action.label if action.type == 'screenshot' else action.type}.png"
+            self.session.screenshot(self.evidence_dir / filename)
+            screenshot = f"evidence/{filename}"
+            self.session.check_network_policy()
+            if not self.session.is_healthy():
+                raise BrowserStartupError("Browser unavailable.")
+        except Exception as exc:
+            if isinstance(exc, PreDispatchFailure):
+                phase, code, eligible = "before_dispatch", exc.code, True
+                code_stage = "request_guard_failure"
+                try:
+                    self.session.check_network_policy()
+                    code_stage = "observation_failure"
+                    observation = self.session.observe(require_fresh=True)
+                    code_stage = "evidence_failure"
+                    filename = f"{index:02d}-failure.png"
+                    self.session.screenshot(self.evidence_dir / filename)
+                    screenshot = f"evidence/{filename}"
+                    self.session.check_network_policy()
+                except Exception:
+                    eligible = False
+                    code = code_stage
+            # Guard and health failures always override an apparent locator miss.
+            try:
+                self.session.check_network_policy()
+            except Exception:
+                code, eligible = "request_guard_failure", False
+            if not self.session.is_healthy():
+                code, eligible = "browser_unavailable", False
+            admitted = eligible and self.recovery_used < self.action_recovery_limit
+            if admitted:
+                self.recovery_used += 1
+            else:
+                self.recovery_fatal = True
+            if isinstance(exc, PreDispatchFailure):
+                self.action_failures.append({"index": index, "type": action.type,
+                    "category": "pre_dispatch_failure", "code": exc.code, "error": str(exc),
+                    "phase": phase, "recoverable": admitted, "resolved_by": None})
+            if not eligible:
+                self.execution_errors.append({"stage": f"action {index} ({action.type})", "error": code})
+            if self.budget_used >= self.budget_limit:
+                self.recovery_fatal = True
+                self.budget_exhausted = True
+            self.actions.append(ActionRecord(index=index, type=action.type, input=action.to_dict(),
+                status="failed", duration_ms=int((time.perf_counter()-started)*1000),
+                observation=observation.to_dict() if observation else None, error=code,
+                screenshot=screenshot, rationale=rationale))
+            self.last_observation = observation
+            self.last_result = {"index": index, "status": "failed", "action": action.to_dict(),
+                "error": code, "failure_code": code, "phase": phase, "at": _iso()}
+            self._write_record()
+            return self._action_response(status="failed", error=code, observation=observation)
+
+        self.executed_actions.append(action)
+        self.actions.append(ActionRecord(index=index, type=action.type, input=action.to_dict(),
+            status="ok", duration_ms=int((time.perf_counter()-started)*1000),
+            observation=observation.to_dict(), screenshot=screenshot, rationale=rationale))
+        if action.type in APPLICATION_ACTIONS:
+            for failure in self._unresolved_failures():
+                if failure.get("recoverable"):
+                    failure["resolved_by"] = index
+        self.last_observation = observation
+        self.last_result = {"index": index, "status": "ok", "action": action.to_dict(),
+                            "error": None, "at": _iso()}
+        self._write_record()
+        return self._action_response(status="ok", error=None, observation=observation)
+
     def _action_response(
         self,
         *,
@@ -443,6 +551,7 @@ class Investigation:
             "error": error,
             "budget": self.budget(),
             "evidence": self.evidence_list(),
+            **({"recovery": self.recovery_summary()} if self.action_recovery_limit else {}),
         }
 
     # --------------------------------------------------------------- read
@@ -452,7 +561,8 @@ class Investigation:
         try:
             observation = self.session.observe()
         except Exception as exc:  # noqa: BLE001 - explicit session error
-            message = f"Could not observe the page: {type(exc).__name__}: {exc}"
+            message = ("Fresh browser observation is unavailable." if self.action_recovery_limit else
+                       f"Could not observe the page: {type(exc).__name__}: {exc}")
             self.execution_errors.append({"stage": "observe", "error": message})
             self.mark_crashed(message)
             raise InvestigationError(
@@ -539,7 +649,7 @@ class Investigation:
                 self.execution_errors.append(
                     {
                         "stage": "final screenshot",
-                        "error": f"{type(exc).__name__}: {exc}",
+                        "error": "evidence_failure" if self.action_recovery_limit else f"{type(exc).__name__}: {exc}",
                     }
                 )
         else:
@@ -552,17 +662,17 @@ class Investigation:
         try:
             self.session.check_network_policy()
         except Exception as exc:
-            self.execution_errors.append({"stage": "request guard at finish", "error": str(exc)})
+            self.execution_errors.append({"stage": "request guard at finish", "error": "request_guard_failure" if self.action_recovery_limit else str(exc)})
 
         if self.budget_exhausted:
             self.check = self._error_check(
                 "Action budget was exhausted before finish. The attempt is "
                 "incomplete and cannot become a confirmed reproduction."
             )
-        elif self.action_failures or self.execution_errors:
+        elif self._unresolved_failures() or self.execution_errors or self.recovery_fatal:
             self.check = self._error_check(
                 "Not evaluated because the attempt recorded "
-                f"{len(self.action_failures)} action failure(s) and "
+                f"{len(self._unresolved_failures())} unresolved action failure(s) and "
                 f"{len(self.execution_errors)} execution error(s). "
                 "An incomplete attempt is not a confirmed reproduction."
             )
@@ -581,7 +691,7 @@ class Investigation:
                 self.execution_errors.append(
                     {
                         "stage": "expectation check",
-                        "error": f"{type(exc).__name__}: {exc}",
+                        "error": "expectation_check_failed" if self.action_recovery_limit else f"{type(exc).__name__}: {exc}",
                     }
                 )
                 self.check = self._error_check(
@@ -594,6 +704,7 @@ class Investigation:
 
     def _finish_response(self) -> dict[str, Any]:
         return {
+            **({"recovery": self.recovery_summary()} if self.action_recovery_limit else {}),
             **self.session.network_record(),
             "status": "ok",
             "session_id": self.session_id,
@@ -620,13 +731,15 @@ class Investigation:
 
     # -------------------------------------------------------------- export
     def _export_availability(self) -> tuple[bool, str]:
+        if self.action_recovery_limit and (self.recovery_fatal or self.execution_errors or self._unresolved_failures()):
+            return False, "The attempt has an unresolved failure or execution error."
         if self.exported:
             return True, ""
         if self.attempt_status != "finished":
             return False, "The attempt has not finished."
         if self.budget_exhausted:
             return False, "The action budget was exhausted."
-        if self.action_failures or self.execution_errors:
+        if self._unresolved_failures() or self.execution_errors or self.recovery_fatal:
             return False, "The attempt recorded action failures or execution errors."
         if self.check is None or self.check.status not in {"passed", "failed"}:
             return False, "The expectation was not evaluated successfully."
@@ -641,9 +754,24 @@ class Investigation:
             "reason": reason,
             "recipe_path": "recipe.json" if self.exported else None,
             "sha256": self.recipe_hash,
+            **({"path_semantics": "successful_actions",
+                "source_attempt_indices": [r.index for r in self.actions if r.status == "ok"] if self.exported else None,
+                "omitted_attempt_indices": [r.index for r in self.actions if r.status != "ok"]}
+               if self.action_recovery_limit else {}),
         }
 
     def export_recipe(self) -> dict[str, Any]:
+        if self.action_recovery_limit:
+            try:
+                self.session.check_network_policy()
+                if not self.session.is_healthy():
+                    raise BrowserStartupError("Browser unavailable.")
+            except Exception:
+                self.recovery_fatal = True
+                self.execution_errors.append({"stage": "export", "error": "session_or_guard_failure"})
+                self.check = self._error_check("Session or request guard failed before export.")
+                self._write_record()
+                raise InvestigationError("Session or guard failure prevents export.", code="not_exportable") from None
         available, reason = self._export_availability()
         if not available:
             raise InvestigationError(
@@ -659,9 +787,21 @@ class Investigation:
             actions=tuple(self.executed_actions),
         )
         path = self.run_dir / "recipe.json"
-        write_recipe(path, recipe)
+        if not self.action_recovery_limit:
+            write_recipe(path, recipe)
         self.exported = True
         self.recipe_hash = recipe_fingerprint(recipe)
+        if self.action_recovery_limit:
+            try:
+                validate_export_mapping(self._run_document(), recipe)
+                write_recipe(path, recipe)
+            except Exception:
+                self.exported = False
+                self.recovery_fatal = True
+                self.execution_errors.append({"stage": "export", "error": "invalid_successful_path_mapping"})
+                self.check = self._error_check("The successful path could not be linked to its source attempts.")
+                self._write_record()
+                raise InvestigationError("Invalid successful-path export mapping.", code="not_exportable") from None
         self._write_record()
         return {
             "status": "ok",
@@ -738,6 +878,8 @@ class Investigation:
             document["bug_report"] = self.bug_report
         if self.model_calls is not None:
             document["model_calls"] = dict(self.model_calls)
+        if self.action_recovery_limit:
+            document["recovery"] = self.recovery_summary()
         if self.requirement is not None:
             document["requirement"] = self.requirement
         if self.scenario is not None:

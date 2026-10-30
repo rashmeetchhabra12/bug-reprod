@@ -302,7 +302,9 @@ class AgentService:
             )
         return investigation
 
-    def start_investigation(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def start_investigation(self, payload: dict[str, Any], *, action_recovery_limit: int = 0) -> dict[str, Any]:
+        from .recovery import validate_recovery_limit
+        validate_recovery_limit(action_recovery_limit)
         self.touch()
         if not isinstance(payload, dict):
             raise InvestigationError("The request body must be a JSON object.")
@@ -371,6 +373,7 @@ class AgentService:
             headless=self.config.headless,
             host=host,
             resource_policy=resource_policy,
+            action_recovery_limit=action_recovery_limit,
         )
         self.sessions[session_id] = investigation
         return {

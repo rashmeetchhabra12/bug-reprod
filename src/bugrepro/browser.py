@@ -30,6 +30,7 @@ from playwright.sync_api import (
 )
 
 from .recipe import Action
+from .recovery import PreDispatchFailure
 from .safety import is_loopback_url, resolve_target, validate_base_url
 
 ARIA_SNAPSHOT_LIMIT = 10_000
@@ -78,6 +79,37 @@ _BUTTON_DETAILS = """el => {
         blockers};
 }"""
 RESOURCE_POLICIES = frozenset({"strict", "block-external-images"})
+
+# Trusted read-only preflight. In particular, no trial clicks or scrolling.
+# An outside-viewport rectangle alone is NOT proof that auto-scroll cannot help.
+_PREFLIGHT_CONTROL = """(el, kind) => {
+    if (el.matches(':disabled')) return 'control_disabled';
+    if (kind === 'fill' && ['INPUT', 'TEXTAREA'].includes(el.tagName) && el.readOnly)
+        return 'control_readonly';
+    const r = el.getBoundingClientRect(), s = getComputedStyle(el);
+    if (!r.width || !r.height || ['hidden', 'collapse'].includes(s.visibility))
+        return 'control_hidden';
+    if (kind !== 'click' || s.position !== 'fixed' ||
+        !(r.bottom <= 0 || r.right <= 0 || r.top >= innerHeight || r.left >= innerWidth))
+        return null;
+    // Prove viewport attachment conservatively: transformed/contained/animated
+    // ancestors can change fixed positioning or move it into view. Unknown =>
+    // normal execution, whose failures are fatal, not speculative recovery.
+    let count = 0;
+    for (let node = el; node; node = node.assignedSlot || node.parentElement || node.getRootNode().host) {
+        if (++count > 64) return null;
+        const c = getComputedStyle(node);
+        if (c.transform !== 'none' || (c.translate && c.translate !== 'none') ||
+            (c.rotate && c.rotate !== 'none') || (c.scale && c.scale !== 'none') ||
+            c.transformStyle !== 'flat' || c.perspective !== 'none' || c.filter !== 'none' ||
+            (c.backdropFilter && c.backdropFilter !== 'none') || c.contain !== 'none' ||
+            (c.containerType && c.containerType !== 'normal') ||
+            (c.contentVisibility && c.contentVisibility !== 'visible') ||
+            c.willChange !== 'auto' || (c.zoom && Number(c.zoom) !== 1) ||
+            node.getAnimations().some(a => a.playState === 'running' || a.pending)) return null;
+    }
+    return 'fixed_outside_viewport';
+}"""
 
 
 def validate_resource_policy(value: Any) -> str:
@@ -228,6 +260,7 @@ class BrowserSession:
         self.blocked_resources: list[dict[str, Any]] = []
         self.guard_errors: list[str] = []
         self._main_frame_id: str | None = None
+        self._page_crashed = False
 
     def __enter__(self) -> "BrowserSession":
         try:
@@ -236,6 +269,7 @@ class BrowserSession:
                 self._host = self._owned_host
             self._context = self._host.new_context(timeout_ms=self.timeout_ms)
             self.page = self._context.new_page()
+            self.page.on("crash", self._on_page_crash)
             # CDP Fetch validates every request, including each redirect hop,
             # before it reaches the network. Playwright's route handler does not
             # intercept redirect destinations reliably.
@@ -343,18 +377,28 @@ class BrowserSession:
         if self.page is None or self._host is None:
             return False
         try:
-            return not self.page.is_closed() and self._host.is_connected()
+            return not self._page_crashed and not self.page.is_closed() and self._host.is_connected()
         except Exception:  # noqa: BLE001 - treat any check failure as unhealthy
             return False
+
+    def _on_page_crash(self, *_: Any) -> None:
+        self._page_crashed = True
 
     def _require_page(self) -> Page:
         if self.page is None:
             raise BrowserStartupError("Browser page is not available.")
         return self.page
 
-    def perform(self, action: Action) -> Observation:
+    def perform(self, action: Action, *, preflight: bool = False) -> Observation:
         """Execute one validated action and return the page state afterwards."""
         page = self._require_page()
+        remaining = self.timeout_ms
+        if preflight:
+            self.check_network_policy()
+            if not self.is_healthy():
+                raise BrowserStartupError("Browser session is unavailable.")
+            if action.type in {"click", "fill"}:
+                remaining = self._preflight(action)
 
         if action.type == "goto":
             assert action.path is not None
@@ -364,10 +408,10 @@ class BrowserSession:
             )
         elif action.type == "click":
             assert action.locator is not None
-            self._locator(action.locator).click()
+            self._locator(action.locator).click(timeout=remaining)
         elif action.type == "fill":
             assert action.locator is not None and action.text is not None
-            self._locator(action.locator).fill(action.text)
+            self._locator(action.locator).fill(action.text, timeout=remaining)
         elif action.type == "reload":
             # Same-origin reload only: the page keeps whatever origin it has.
             page.reload(wait_until="domcontentloaded")
@@ -376,9 +420,38 @@ class BrowserSession:
         else:
             raise ValueError(f"Unsupported action type: {action.type!r}")
 
-        observation = self.observe()
+        observation = self.observe(require_fresh=preflight) if preflight else self.observe()
         self.check_network_policy()
         return observation
+
+    def _preflight(self, action: Action) -> int:
+        deadline = time.monotonic() + self.timeout_ms / 1000
+        locator = self._locator(action.locator)
+        def remaining():
+            value = int((deadline - time.monotonic()) * 1000)
+            if value <= 0:
+                raise RuntimeError("Preflight deadline expired.")
+            return value
+        count = locator.count()
+        if count == 0:
+            from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+            try:
+                locator.wait_for(state="attached", timeout=remaining())
+            except PlaywrightTimeoutError:
+                self.check_network_policy()
+                if locator.count() == 0:
+                    raise PreDispatchFailure("locator_missing") from None
+                raise
+            count = locator.count()
+        if count > 1:
+            raise PreDispatchFailure("locator_ambiguous")
+        if count != 1:
+            raise RuntimeError("Locator changed during preflight.")
+        code = locator.evaluate(_PREFLIGHT_CONTROL, action.type, timeout=remaining())
+        self.check_network_policy()
+        if code:
+            raise PreDispatchFailure(code)
+        return remaining()
 
     def _locator(self, locator: Any) -> Any:
         page = self._require_page()
@@ -391,17 +464,25 @@ class BrowserSession:
         target.parent.mkdir(parents=True, exist_ok=True)
         page.screenshot(path=str(target), full_page=True)
 
-    def observe(self) -> Observation:
+    def observe(self, *, require_fresh: bool = False) -> Observation:
         """Return page state plus bounded, read-only button hints and blockers."""
         page = self._require_page()
+        if require_fresh:
+            self.check_network_policy()
+            if not self.is_healthy() or (page.url != "about:blank" and not is_loopback_url(page.url)):
+                raise BrowserStartupError("Fresh browser observation is unavailable.")
 
         try:
             url = page.url
         except PlaywrightError:
+            if require_fresh:
+                raise
             url = ""
         try:
             title = page.title()
         except PlaywrightError:
+            if require_fresh:
+                raise
             title = ""
 
         headings: list[str] = []
@@ -418,6 +499,8 @@ class BrowserSession:
         try:
             aria = page.locator("body").aria_snapshot()
         except PlaywrightError:
+            if require_fresh:
+                raise
             try:
                 # Older Playwright versions expose the accessibility tree this way.
                 snapshot = page.accessibility.snapshot()  # type: ignore[attr-defined]

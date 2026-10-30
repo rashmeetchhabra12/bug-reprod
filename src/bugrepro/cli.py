@@ -147,6 +147,8 @@ def _add_investigation_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--model-timeout", type=_positive_float, default=60)
     parser.add_argument("--model-call-limit", type=_positive_int, default=25)
     parser.add_argument("--action-budget", type=_positive_int, default=20)
+    parser.add_argument("--action-recovery-limit", type=int, choices=range(3), default=0,
+                        help="opt-in pre-dispatch recovery opportunities (default: 0, strict)")
     parser.add_argument("--timeout-ms", type=_positive_int, default=10000)
     parser.add_argument("--run-root", default="runs")
     parser.add_argument("--label", default="investigation")
@@ -779,6 +781,7 @@ def _investigate_request(args, bug_report, expectation, model_client, driver):
         target=args.target, bug_report=bug_report, expectation=expectation,
         model_client=model_client, run_root=args.run_root, label=args.label,
         action_budget=args.action_budget, model_call_limit=args.model_call_limit,
+        action_recovery_limit=args.action_recovery_limit,
         timeout_ms=args.timeout_ms, headed=args.headed, driver=driver,
         resource_policy=args.resource_policy,
         progress=lambda message: print(message, file=sys.stderr, flush=True),
@@ -931,6 +934,7 @@ def _cmd_guide(args) -> int:
         print(json.dumps(expectation.to_dict(), indent=2, ensure_ascii=False), file=sys.stderr)
         print(f"Fingerprint: {expectation.fingerprint()}\nTarget: {args.target}\nBackend: {args.decision_backend}", file=sys.stderr)
         print(f"Limits: {args.action_budget} actions, {args.model_call_limit} decision calls. Resource policy: {args.resource_policy}.", file=sys.stderr)
+        print(f"Action recovery limit: {args.action_recovery_limit}.", file=sys.stderr)
         print("All external browser requests stay blocked; results describe this restricted environment.", file=sys.stderr)
         if not args.json and _ask("Freeze this expectation and start? [y/N]:").lower() not in {"y", "yes"}:
             raise EOFError

@@ -139,6 +139,11 @@ def render_report(run: dict[str, Any]) -> str:
     lines.append(f"- Started: {_cell(run['started_at'])}")
     lines.append(f"- Finished: {_cell(run.get('finished_at') or 'not finished')}")
     lines.append(f"- Recipe: {_recipe_line(run)}")
+    if run.get("recovery"):
+        recovery = run["recovery"]
+        lines.append(f"- Recovery: {recovery['used']}/{recovery['limit']}; recovered {recovery['recovered_count']}; unresolved {recovery['pending_attempt_indices']}.")
+        lines.append("- Replay repeats only the successful path, not the failed attempts.")
+        lines.append(f"- Recipe action order → source attempt indices: {(run.get('export') or {}).get('source_attempt_indices')}.")
     lines.append(f"- Resource policy: {_cell(run.get('resource_policy', 'strict'))}")
     lines.append(
         "- Restricted environment: all external requests are blocked. Results "
@@ -247,6 +252,8 @@ def render_report(run: dict[str, Any]) -> str:
             lines.append(
                 f"- Action {failure['index']} ({_cell(failure['type'], 20)}): "
                 f"{failure['error']}"
+                + (f" (Recovered by attempt {failure['resolved_by']}; excluded from recipe.)"
+                   if failure.get("resolved_by") else "")
             )
     else:
         lines.append("None.")

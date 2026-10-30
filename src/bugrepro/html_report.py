@@ -143,6 +143,16 @@ def load_report_run(run_dir: str | Path, role: str) -> ReportRun:
         raise ReportError(f"run.json in {path} is not a JSON object.")
     if not isinstance(data.get("check"), dict):
         raise ReportError(f"run.json in {path} has no check result.")
+    if data.get("recovery") and (data.get("export") or {}).get("recipe_path"):
+        from .recipe import load_recipe
+        from .recovery import validate_export_mapping
+        try:
+            source = (path / "recipe.json").resolve()
+            if path.resolve() not in source.parents:
+                raise ValueError("Recipe outside selected run.")
+            validate_export_mapping(data, load_recipe(source))
+        except Exception:
+            raise ReportError("Recovery recipe mapping does not match its source attempts.") from None
     return ReportRun(role=role, run_dir=path, data=data)
 
 
@@ -303,6 +313,7 @@ def _summary_card(run: ReportRun) -> str:
     attempt_status = _attempt_status(run)
     errors = run.data.get("execution_errors") or []
     failures = run.data.get("action_failures") or []
+    recovery_note = _recovery_notice(run)
     return f"""
       <div class="card summary">
         <div class="summary-head">
@@ -320,12 +331,25 @@ def _summary_card(run: ReportRun) -> str:
           <div><dt>Action failures</dt><dd>{_esc(len(failures))}</dd></div>
           <div><dt>Execution errors</dt><dd>{_esc(len(errors))}</dd></div>
         </dl>
+        {recovery_note}
         <div class="compare-line">
           <span class="muted">Expected:</span> <strong>{_esc(run.check.get("expected", ""))}</strong>
           <span class="muted">Observed:</span> <strong>{_esc(_observed_text(run))}</strong>
         </div>
       </div>
     """
+
+
+def _recovery_notice(run: ReportRun) -> str:
+    recovery = run.data.get("recovery")
+    if not recovery:
+        return ""
+    mapping = (run.data.get("export") or {}).get("source_attempt_indices")
+    return (f'<p>Action recovery: {_esc(recovery.get("used"))} / {_esc(recovery.get("limit"))}; '
+            f'recovered: {_esc(recovery.get("recovered_count"))}; '
+            f'unresolved: {_esc(recovery.get("pending_attempt_indices"))}.</p>'
+            '<p>Replay repeats only the successful path, not the failed attempts. '
+            f'Recipe action order maps to source attempt indices: {_esc(mapping)}.</p>')
 
 
 def _comparison_table(
@@ -368,9 +392,12 @@ def _comparison_table(
         ),
         row("Run", lambda run: f'<code class="fp">{_esc(run.run_id)}</code>'),
     ]
+    successful_path = any(run.data.get("recovery") for run in runs.values())
     banner = (
         '<p class="banner banner-ok">Unchanged replay verified: all selected runs '
-        "used the same recipe and the same frozen expectation, and the replay runs "
+        + ("used the exported successful path, not its failed attempts, with the same frozen expectation, and the replay runs "
+           if successful_path else "used the same recipe and the same frozen expectation, and the replay runs ")
+        +
         "are deterministic.</p>"
         if unchanged
         else '<p class="banner banner-warn">Warning: this comparison does not '
@@ -444,6 +471,12 @@ def _action_details(run: ReportRun) -> str:
             if error
             else ""
         )
+        if run.data.get("recovery"):
+            failure = next((f for f in run.data.get("action_failures", []) if f.get("index") == index), None)
+            if failure:
+                error_html += (f'<p>Failed before dispatch; recovered by attempt {_esc(failure.get("resolved_by"))}. '
+                               'Failed attempt excluded from any successful-path recipe.</p>'
+                               if failure.get("resolved_by") else '<p>Unresolved failure; no successful-path export.</p>')
         headings = observation.get("headings") or []
         headings_text = ", ".join(str(item) for item in headings) if headings else "(none)"
         url = observation.get("url") or "(none)"
